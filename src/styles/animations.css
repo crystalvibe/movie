@@ -1,0 +1,217 @@
+@keyframes float-up {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-100px);
+    opacity: 0;
+  }
+}
+
+.animate-float-up {
+  animation: float-up 2s ease-out forwards;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.3s ease-out forwards;
+}
+
+@keyframes bounce-gentle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes float-gentle {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(2px, -2px) rotate(10deg); }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-bounce-gentle {
+  animation: bounce-gentle 2s ease-in-out infinite;
+}
+
+.animate-float-gentle {
+  animation: float-gentle 2s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 4s linear infinite;
+}
+
+@keyframes rgb-fill {
+  0% { fill: #ff69b4; }  /* hot pink */
+  33% { fill: #9370db; } /* medium purple */
+  66% { fill: #87ceeb; } /* sky blue */
+  100% { fill: #ff69b4; } /* back to hot pink */
+}
+
+.animate-rgb-fill {
+  animation: rgb-fill 6s linear infinite;
+}
+
+/* Add smooth pulse animation for loading states */
+@keyframes pulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(0.98);
+  }
+}
+
+/* Add fade transitions for smoother UI */
+.fade-enter {
+  opacity: 0;
+}
+.fade-enter-active {
+  opacity: 1;
+  transition: opacity 500ms ease-in;
+}
+.fade-exit {
+  opacity: 1;
+}
+.fade-exit-active {
+  opacity: 0;
+  transition: opacity 500ms ease-out;
+}
+
+/* Performance optimizations */
+.will-change-transform {
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.gpu-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Optimize images */
+img.optimized {
+  image-rendering: auto;
+  transform: translateZ(0);
+}
+
+/* For smoother scrolling with less jank */
+.smooth-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Reduce layout shifts */
+.content-placeholder {
+  min-height: 300px;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Add instant transition style for elements that shouldn't animate */
+.instant-transition {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* Progressive image loading animations */
+.image-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Optimize animations with will-change and hardware acceleration */
+.lazy-image-container {
+  will-change: opacity;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Content card animations */
+.content-card {
+  will-change: transform, width;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1), 
+              transform 300ms cubic-bezier(0.4, 0, 0.2, 1), 
+              box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* RGB animation for heart icon */
+@keyframes rgb-pulse {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+
+.animate-rgb-fill {
+  fill: #ff6b81;
+  animation: rgb-pulse 10s infinite linear;
+}
+
+/* More efficient pulse animation */
+@keyframes pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 0.3; }
+  100% { opacity: 0.6; }
+}
+
+/* Fast fade-in for UI elements */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Removed unnecessary animations */
+
+/* Add containment for better performance */
+.content-placeholder, 
+.lazy-image-container img {
+  contain: strict;
+} 

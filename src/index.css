@@ -1,0 +1,388 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Playfair+Display:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+
+    --card: 240 10% 5%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 4%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 265 83% 45%;
+    --primary-foreground: 0 0% 98%;
+
+    --secondary: 240 5% 84%;
+    --secondary-foreground: 240 10% 4%;
+
+    --accent: 267 75% 62%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 90% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --muted: 240 5% 10%;
+    --muted-foreground: 240 5% 65%;
+
+    --border: 240 5% 15%;
+    --input: 240 5% 15%;
+    --ring: 240 5% 65%;
+
+    --radius: 0.5rem;
+  }
+
+  html {
+    @apply scroll-smooth antialiased;
+    font-size: 16px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    @screen 2xl {
+      font-size: 18px;
+    }
+  }
+
+  body {
+    @apply bg-background text-foreground min-h-screen overflow-x-hidden;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    font-family: 'Montserrat', sans-serif;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: 
+      radial-gradient(circle at 20% 25%, rgba(149, 76, 233, 0.05), transparent 40%),
+      radial-gradient(circle at 80% 75%, rgba(149, 76, 233, 0.05), transparent 40%);
+    transform-origin: center center;
+    pointer-events: none;
+    z-index: -1;
+    will-change: transform, opacity;
+  }
+
+  /* Performance optimizations */
+  * {
+    backface-visibility: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Reduce motion if user prefers it */
+  @media (prefers-reduced-motion: reduce) {
+    body::before {
+      animation: none;
+    }
+    * {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', serif;
+    @apply font-bold tracking-tight;
+  }
+
+  /* Remove existing scrollbar styles and replace with these */
+  ::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  ::-webkit-scrollbar-track {
+    display: none;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    display: none;
+  }
+}
+
+@layer components {
+  .container {
+    @apply px-4 sm:px-6 lg:px-8 mx-auto;
+    max-width: min(100%, 2400px);
+  }
+
+  .grid-layout {
+    @apply grid gap-4 sm:gap-6 md:gap-8;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+  }
+
+  .grid-layout-featured {
+    @apply grid gap-4 sm:gap-6 md:gap-8;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  }
+
+  .title-glow {
+    text-shadow: 0 0 10px rgba(149, 76, 233, 0.5);
+  }
+
+  .hover-effect {
+    @apply hover:shadow-[0_0_15px_rgba(149,76,233,0.4)] transition-shadow duration-300;
+  }
+
+  /* Responsive Typography */
+  h1 {
+    @apply text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight;
+    letter-spacing: -0.02em;
+  }
+
+  h2 {
+    @apply text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight;
+    letter-spacing: -0.01em;
+  }
+
+  h3 {
+    @apply text-xl sm:text-2xl font-semibold;
+  }
+
+  /* Responsive Spacing */
+  .section-padding {
+    @apply py-8 sm:py-12 md:py-16 lg:py-20;
+  }
+
+  .section-margin {
+    @apply my-8 sm:my-12 md:my-16 lg:my-20;
+  }
+
+  /* Responsive Modal */
+  .modal-content {
+    @apply w-[90vw] sm:w-[80vw] md:w-[70vw] lg:w-[60vw] xl:w-[50vw] max-w-3xl mx-auto;
+  }
+
+  /* Responsive Video Player */
+  .video-player-container {
+    @apply aspect-video w-full max-h-[80vh] mx-auto;
+  }
+
+  /* Responsive Search Results */
+  .search-results-container {
+    @apply fixed top-20 left-0 right-0 mx-auto w-[95%] sm:w-[90%] md:w-[80%] lg:w-[70%] xl:w-[60%] 
+           max-w-4xl bg-card/95 backdrop-blur-md rounded-lg shadow-2xl 
+           border border-border/50 overflow-hidden z-50;
+  }
+
+  /* Responsive Navigation */
+  .nav-container {
+    @apply max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  /* Responsive Buttons */
+  .btn {
+    @apply px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 text-sm sm:text-base rounded-md transition-all duration-300;
+  }
+
+  .btn-primary {
+    @apply bg-primary hover:bg-primary/90 text-white font-medium;
+  }
+
+  .btn-secondary {
+    @apply border border-primary hover:border-primary/90 hover:bg-primary/10 text-primary/90 font-medium;
+  }
+
+  /* Responsive Form Elements */
+  .form-input {
+    @apply w-full px-3 sm:px-4 py-2 sm:py-2.5 text-sm sm:text-base 
+           bg-background border border-border rounded-lg 
+           focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent
+           transition-all duration-300;
+  }
+
+  /* Content Card Styles */
+  .content-card {
+    @apply relative overflow-hidden rounded-lg transition-all duration-500 bg-card border border-border/50 hover:border-primary/30;
+  }
+
+  .content-card:hover {
+    @apply transform scale-105 shadow-xl;
+  }
+
+  .content-overlay {
+    @apply absolute inset-0 bg-gradient-to-t from-black/80 to-transparent;
+  }
+
+  .media-content {
+    @apply w-full h-full object-cover;
+  }
+
+  .save-button {
+    @apply absolute top-2 right-2 opacity-0 transition-opacity;
+  }
+
+  .save-button:hover {
+    @apply opacity-100;
+  }
+
+  /* Navigation Styles */
+  .nav-item {
+    @apply relative overflow-hidden;
+  }
+
+  .nav-item::after {
+    content: '';
+    @apply absolute bottom-0 left-0 w-full h-0.5 bg-primary transform scale-x-0 transition-transform duration-300 origin-center;
+  }
+
+  .nav-item:hover::after {
+    @apply scale-x-100;
+  }
+
+  /* Interactive Elements */
+  .interactive-element {
+    @apply transition-all duration-300;
+  }
+
+  .interactive-element:hover {
+    @apply transform scale-105;
+  }
+
+  /* Animation Classes */
+  .fade-enter {
+    animation: fadeEnter 0.3s ease-in-out;
+  }
+
+  .slide-up {
+    animation: slideUp 0.3s ease-in-out;
+  }
+
+  @keyframes fadeEnter {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+}
+
+@layer utilities {
+  /* Cinematic animations */
+  .animate-slide-up {
+    animation: slide-up 0.5s ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-out;
+  }
+
+  .animate-scale {
+    animation: scale 0.3s ease-out;
+  }
+
+  .animate-glow {
+    animation: glow 2s ease-in-out infinite;
+  }
+
+  /* Movie card hover effect */
+  .movie-card {
+    @apply relative overflow-hidden rounded-lg transition-all duration-500 bg-card border border-border/50;
+  }
+
+  .movie-card:hover {
+    @apply transform scale-105 shadow-xl border-primary/30;
+  }
+
+  .movie-card::after {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-t from-black to-transparent opacity-0 transition-opacity duration-300;
+  }
+
+  .movie-card:hover::after {
+    @apply opacity-100;
+  }
+
+  /* Glass card effect */
+  .glass-card {
+    @apply bg-white/5 backdrop-blur-md border border-white/10 rounded-lg;
+  }
+
+  /* Logo and Brand Styling */
+  .brand-logo {
+    @apply font-serif font-bold tracking-wide;
+    letter-spacing: -0.02em;
+  }
+  
+  .logo-accent {
+    @apply italic text-primary;
+  }
+  
+  /* Professional typography utilities */
+  .title-serif {
+    font-family: 'Playfair Display', serif;
+    @apply tracking-tight;
+  }
+  
+  .title-sans {
+    font-family: 'Montserrat', sans-serif;
+    @apply tracking-tight font-medium;
+  }
+  
+  /* Gradient text effect */
+  .gradient-text {
+    @apply text-transparent bg-clip-text bg-gradient-to-r from-violet-600 to-indigo-400;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scale {
+  from {
+    transform: scale(0.95);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@keyframes glow {
+  0% {
+    filter: brightness(100%);
+  }
+  50% {
+    filter: brightness(120%);
+  }
+  100% {
+    filter: brightness(100%);
+  }
+}

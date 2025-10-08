@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  
+  *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+  }
+}
+
+.bg-noise {
+  position: relative;
+  overflow: hidden;
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+.bg-noise::before {
+  content: "";
+  position: absolute;
+  inset: -100%;
+  width: 300%;
+  height: 300%;
+  opacity: 0.15;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch' result='noise'/%3E%3CfeColorMatrix type='saturate' values='0' in='noise' result='noiseGray'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='1'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  mix-blend-mode: overlay;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+  animation: grain 3s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes grain {
+  0% { transform: translate(0, 0) rotate(0deg) }
+  33% { transform: translate(1%, 1%) rotate(0.5deg) }
+  66% { transform: translate(-1%, -1%) rotate(-0.5deg) }
+  100% { transform: translate(0, 0) rotate(0deg) }
+}
+
+@keyframes moveLight {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(200%); }
+} 
