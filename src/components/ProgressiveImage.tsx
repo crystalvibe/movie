@@ -57,7 +57,13 @@ const ProgressiveImage = ({
   
   // Use intersection observer for non-priority images
   useEffect(() => {
-    if (priority) return; // Skip observer for priority images
+    if (priority) {
+      // For priority images, load immediately
+      if (fullImageRef.current) {
+        fullImageRef.current.src = fullSizeUrl;
+      }
+      return;
+    }
     
     const imageRef = fullImageRef.current;
     if (!imageRef) return;
@@ -70,7 +76,10 @@ const ProgressiveImage = ({
           observer.disconnect();
         }
       },
-      { rootMargin: '200px' } // Start loading when within 200px of viewport
+      { 
+        rootMargin: '50px', // Reduced from 200px to load closer to viewport
+        threshold: 0.1 // Only trigger when 10% visible
+      }
     );
     
     observer.observe(imageRef);
@@ -123,9 +132,9 @@ const ProgressiveImage = ({
         className={`absolute inset-0 w-full h-full object-cover ${loaded ? 'image-fade-in' : 'opacity-0'} ${className}`}
         style={{ 
           ...style,
-          transition: 'opacity 0.3s ease',
+          transition: loaded ? 'opacity 0.2s ease' : 'none', // Faster transition, no transition when not loaded
           opacity: loaded && !error ? 1 : 0,
-          willChange: 'opacity'
+          willChange: loaded ? 'opacity' : 'auto' // Only use willChange when transitioning
         }}
       />
     </div>

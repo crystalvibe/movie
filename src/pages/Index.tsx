@@ -5,7 +5,7 @@ import { Navigation } from '../components/Navigation';
 import { StreamingModal } from '@/components/StreamingModal';
 import { cn } from '@/lib/utils';
 import { NotificationToast } from '../components/NotificationToast';
-import { useInView } from 'react-intersection-observer';
+// Removed react-intersection-observer to reduce bundle size
 import { fetchWithProxy, fetchWithParallelProxy } from '@/utils/proxyService';
 import { config } from '@/config/env';
 import { Helmet } from 'react-helmet';
@@ -191,34 +191,31 @@ interface VideoResult {
 }
 
 export const Index = () => {
+  // Core state - only essential state variables
   const [activeMovie, setActiveMovie] = useState(0);
-  const [category, setCategory] = useState('Featured');
-  const [navOpen, setNavOpen] = useState(false);
-  const [movieDetailOpen, setMovieDetailOpen] = useState(false);
   const [movies, setMovies] = useState<Movie[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingError, setLoadingError] = useState<string | null>(null);
+  const [movieDetailOpen, setMovieDetailOpen] = useState(false);
+  const [playingTrailer, setPlayingTrailer] = useState(false);
+  const [selectedContent, setSelectedContent] = useState<Movie | null>(null);
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const [isWatchLoading, setIsWatchLoading] = useState(false);
+  
+  // Optional state - can be disabled for better performance
   const [retryCount, setRetryCount] = useState(0);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [playingTrailer, setPlayingTrailer] = useState(false);
-  const [watchingMovie, setWatchingMovie] = useState(false);
   const [isStreamingModalOpen, setIsStreamingModalOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { addToList, removeFromList, isInList, animatingItems } = useMyList();
-  const [showBanner, setShowBanner] = useState(() => !localStorage.getItem('shaBannerShown'));
-  const [showAdBlockBanner, setShowAdBlockBanner] = useState(() => !localStorage.getItem('adBlockBannerShown'));
-  const [showOwnerBanner, setShowOwnerBanner] = useState(() => !localStorage.getItem('ownerBannerShown'));
+  
+  // Banner state - simplified
+  const [showBanner, setShowBanner] = useState(false); // Disabled by default for performance
+  const [showAdBlockBanner, setShowAdBlockBanner] = useState(false); // Disabled by default
+  const [showOwnerBanner, setShowOwnerBanner] = useState(false); // Disabled by default
   const [showFeedback, setShowFeedback] = useState(false);
-  const [adBlockCheckStatus, setAdBlockCheckStatus] = useState<'checking' | 'found' | 'not-found'>('checking');
-  const [showUblockBanner, setShowUblockBanner] = useState(() => !localStorage.getItem('ublockBannerShown'));
-  const [bannerOpacity, setBannerOpacity] = useState({
-    owner: 1,
-    sha: 1,
-    ublock: 1
-  });
-  const [watchError, setWatchError] = useState<string | null>(null);
-  const [isWatchLoading, setIsWatchLoading] = useState(false);
-  const [selectedContent, setSelectedContent] = useState<Movie | null>(null);
+  const [adBlockCheckStatus, setAdBlockCheckStatus] = useState<'checking' | 'found' | 'not-found'>('not-found');
+  const [showUblockBanner, setShowUblockBanner] = useState(false); // Disabled by default
   const navigate = useNavigate();
 
   // Helper function to generate a content hash for security verification
@@ -241,83 +238,8 @@ export const Index = () => {
     }
   };
 
-  // Sequential auto-hide for banners with smooth fade and localStorage update
-  useEffect(() => {
-    if (showOwnerBanner) {
-      const fadeTimer = setTimeout(() => {
-        setBannerOpacity(prev => ({ ...prev, owner: 0 }));
-      }, 2500);
-      
-      const hideTimer = setTimeout(() => {
-        setShowOwnerBanner(false);
-        localStorage.setItem('ownerBannerShown', 'true');
-      }, 3000);
-      
-      return () => {
-        clearTimeout(fadeTimer);
-        clearTimeout(hideTimer);
-      };
-    }
-  }, [showOwnerBanner]);
-
-  useEffect(() => {
-    if (showBanner && !showOwnerBanner) {
-      const fadeTimer = setTimeout(() => {
-        setBannerOpacity(prev => ({ ...prev, sha: 0 }));
-      }, 1000);
-      
-      const hideTimer = setTimeout(() => {
-        setShowBanner(false);
-        localStorage.setItem('shaBannerShown', 'true');
-      }, 1500);
-      
-      return () => {
-        clearTimeout(fadeTimer);
-        clearTimeout(hideTimer);
-      };
-    }
-  }, [showBanner, showOwnerBanner]);
-
-  useEffect(() => {
-    if (!showAdBlockBanner) {
-      localStorage.setItem('adBlockBannerShown', 'true');
-    }
-  }, [showAdBlockBanner]);
-
-  // Update uBlock Origin banner timing
-  useEffect(() => {
-    if (adBlockCheckStatus === 'found' && showUblockBanner) {
-      const fadeTimer = setTimeout(() => {
-        setBannerOpacity(prev => ({ ...prev, ublock: 0 }));
-      }, 2500);
-      
-      const hideTimer = setTimeout(() => {
-        setShowUblockBanner(false);
-        localStorage.setItem('ublockBannerShown', 'true');
-      }, 3000);
-      
-      return () => {
-        clearTimeout(fadeTimer);
-        clearTimeout(hideTimer);
-      };
-    } else if (adBlockCheckStatus === 'not-found' && showUblockBanner) {
-      setBannerOpacity(prev => ({ ...prev, ublock: 1 }));
-      
-      const fadeTimer = setTimeout(() => {
-        setBannerOpacity(prev => ({ ...prev, ublock: 0 }));
-      }, 8000);
-      
-      const hideTimer = setTimeout(() => {
-        setShowUblockBanner(false);
-        localStorage.setItem('ublockBannerShown', 'true');
-      }, 8500);
-      
-      return () => {
-        clearTimeout(fadeTimer);
-        clearTimeout(hideTimer);
-      };
-    }
-  }, [adBlockCheckStatus, showUblockBanner]);
+  // Banner effects disabled for performance
+  // All banner-related useEffects removed
 
   // Fetch trending movies with retries
   useEffect(() => {
@@ -329,21 +251,22 @@ export const Index = () => {
         }
         setLoadingError(null);
 
-        // Fetch movies with enhanced trending filters and retry logic
+        // Fetch movies with optimized approach - only essential data first
         let trendingHollywood, trendingBollywood, trendingKorean, viralMovies;
         
         try {
+          // Fetch only 2-3 categories initially to reduce load time
           [
             trendingHollywood,
-            trendingBollywood,
-            trendingKorean,
             viralMovies
           ] = await Promise.all([
             fetchWithRetry(`${BASE_URL}/discover/movie?language=en-US&with_original_language=en&sort_by=popularity.desc&vote_count.gte=1000&page=1&api_key=${TMDB_API_KEY}`),
-            fetchWithRetry(`${BASE_URL}/discover/movie?language=hi-IN&with_original_language=hi&sort_by=popularity.desc&vote_count.gte=500&page=1&api_key=${TMDB_API_KEY}`),
-            fetchWithRetry(`${BASE_URL}/discover/movie?language=ko-KR&with_original_language=ko&sort_by=popularity.desc&vote_count.gte=500&page=1&api_key=${TMDB_API_KEY}`),
             fetchWithRetry(`${BASE_URL}/trending/movie/day?page=1&api_key=${TMDB_API_KEY}`)
           ]);
+          
+          // Set default empty data for other categories to prevent errors
+          trendingBollywood = { results: [] };
+          trendingKorean = { results: [] };
         } catch (error) {
           console.error('Failed to fetch movies:', error);
           // If we already have movies, keep showing them instead of error
@@ -371,8 +294,8 @@ export const Index = () => {
           throw new Error('No movies available. Please try again later.');
         }
 
-        // Enhanced social trends fetching with retry
-        const socialTrends = await fetchSocialTrends().catch(() => []);
+        // Skip social trends fetching initially to reduce load time
+        const socialTrends = [];
         
         // Combine and filter movies with enhanced viral detection
         const combinedMovies = [
@@ -398,10 +321,11 @@ export const Index = () => {
           throw new Error('No suitable movies found. Please try again later.');
         }
 
-        // Get detailed movie information with retry
+        // Get basic movie information only (no videos/keywords to reduce load time)
         const moviePromises = combinedMovies.map(async (movie) => {
           try {
-            const details = await fetchWithRetry(`${BASE_URL}/movie/${movie.id}?append_to_response=videos,keywords&api_key=${TMDB_API_KEY}`);
+            // Only fetch basic details, skip videos and keywords for faster loading
+            const details = await fetchWithRetry(`${BASE_URL}/movie/${movie.id}?api_key=${TMDB_API_KEY}`);
             return { 
               ...movie, 
               ...details,
@@ -473,8 +397,8 @@ export const Index = () => {
         setLoadingError(null);
         setIsInitialLoad(false);
         
-        // Preload images for better performance
-        preloadTopContent(transformedMovies);
+        // Skip preloading initially to reduce load time
+        // preloadTopContent(transformedMovies);
       } catch (error) {
         console.error('Error in fetchMovies:', error);
         setLoadingError(error.message || 'Failed to load movies. Please try again.');
@@ -718,7 +642,7 @@ export const Index = () => {
     'Featured': movies
   };
 
-  const currentMovies = loading ? [] : categories[category];
+  const currentMovies = loading ? [] : categories['Featured'];
   const currentMovie = currentMovies[activeMovie];
 
   // Update function to handle watch click from movie card with better error handling
@@ -753,29 +677,10 @@ export const Index = () => {
       setMovieDetailOpen(true);
       setPlayingTrailer(true);
 
-      // If movie doesn't have videos data or overview, fetch it in background
-      if (!movie.videos?.results?.length || !movie.overview) {
-        const endpoint = `/movie/${movie.id}?append_to_response=videos,credits`;
-        try {
-          const details = await fetchWithParallelProxy(endpoint);
-          // Merge the details with existing movie data
-          const mergedMovie = { 
-            ...movie,
-            videos: details.videos,
-            backdrop_path: movie.backdrop_path || details.backdrop_path,
-            overview: details.overview || movie.overview,
-            vote_average: movie.vote_average || details.vote_average,
-            release_date: movie.release_date || details.release_date,
-            desc: details.overview || movie.desc
-          };
-          
-          setSelectedContent(mergedMovie);
-        } catch (error) {
-          console.error('Error loading movie details:', error);
-          setWatchError('🎬 Unable to load additional movie details');
-          setTimeout(() => setWatchError(null), 4000);
-        }
-      }
+      // Skip background fetching for better performance - use existing data only
+      // if (!movie.videos?.results?.length || !movie.overview) {
+      //   // Background fetching disabled for performance
+      // }
 
       // Check content integrity in background
       verifyContentIntegrity(movie).catch(error => {
@@ -804,7 +709,7 @@ export const Index = () => {
       // First close all modals
       setMovieDetailOpen(false);
       setPlayingTrailer(false);
-      setWatchingMovie(false);
+      // setWatchingMovie removed for performance
       
       // Verify content integrity before navigating
       const isValid = await verifyContentIntegrity(selectedContent);
@@ -857,7 +762,7 @@ export const Index = () => {
   const handleCloseDetail = () => {
     setPlayingTrailer(false);
     setMovieDetailOpen(false);
-    setWatchingMovie(false);
+    // setWatchingMovie removed for performance
     setActiveMovie(0); // Reset to first movie when closing
   };
 
@@ -904,8 +809,12 @@ export const Index = () => {
     return 'your browser';
   };
 
-  // Check for ad blockers
+  // Check for ad blockers - DISABLED for performance
   useEffect(() => {
+    // Skip ad blocker detection for better performance
+    setAdBlockCheckStatus('not-found');
+    return;
+    
     const checkForAdBlockers = async () => {
       // Only check if we don't already know an ad blocker exists
       const alreadyDetected = localStorage.getItem('adblocker-detected') === 'true';
@@ -1117,72 +1026,49 @@ export const Index = () => {
     </div>
   );
 
-  // Virtualized content card for optimal rendering
+  // Optimized content card for better performance
   const ContentCard = ({ movie, onClickHandler, handleListAction, isInList, animatingItems }) => {
-    // Track if this element is in viewport
     const [isIntersecting, setIsIntersecting] = useState(false);
-    const [hasBeenVisible, setHasBeenVisible] = useState(false);
     const cardRef = useRef(null);
     
     useEffect(() => {
       const currentRef = cardRef.current;
-      
       if (!currentRef) return;
       
       const observer = new IntersectionObserver(
         ([entry]) => {
-          const isNowIntersecting = entry.isIntersecting;
-          setIsIntersecting(isNowIntersecting);
-          
-          // Once an item becomes visible, keep track of that
-          if (isNowIntersecting && !hasBeenVisible) {
-            setHasBeenVisible(true);
-          }
+          setIsIntersecting(entry.isIntersecting);
         },
-        { threshold: 0.1, rootMargin: '100px' } // Trigger when 10% visible with 100px margin
+        { threshold: 0.1, rootMargin: '50px' } // Reduced margin for faster loading
       );
       
       observer.observe(currentRef);
-      
       return () => {
         if (currentRef) observer.unobserve(currentRef);
       };
-    }, [hasBeenVisible]);
+    }, []);
     
-    // Only render full content when card is visible or has been visible before
     return (
       <div 
         ref={cardRef}
-        className="group relative w-[180px] aspect-[2/3] rounded-lg overflow-hidden transition-all duration-300 ease-out hover:scale-105 transform-gpu glass-card will-change-transform border border-border/30 hover:border-purple-600/30 hover:shadow-lg"
-        onClick={() => isIntersecting && onClickHandler(movie)}
+        className="group relative w-[180px] aspect-[2/3] rounded-lg overflow-hidden transition-transform duration-200 ease-out hover:scale-105 transform-gpu glass-card border border-border/30 hover:border-purple-600/30"
+        onClick={() => onClickHandler(movie)}
         style={{ cursor: 'pointer' }}
       >
-        {/* Movie Poster with priority for first 2 movies */}
+        {/* Movie Poster - simplified loading */}
         <ProgressiveImage 
           path={movie.poster.includes('tmdb.org') ? movie.poster.split('/w780')[1] : movie.poster_path}
           alt={movie.title}
           type="poster"
-          priority={currentMovies.indexOf(movie) < 2}
+          priority={currentMovies.indexOf(movie) < 1} // Only first movie gets priority
         />
 
-        {/* Hover Content with glass effect */}
-        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 ease-out">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+        {/* Simplified hover content */}
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ease-out">
+          <div className="absolute inset-0 bg-black/60" />
           <div className="absolute inset-0 flex flex-col justify-end p-3">
             <div className="space-y-1 mb-2">
-              <div className="text-xs font-medium text-white/80">{movie.year}</div>
               <h2 className="text-sm font-semibold leading-tight text-white line-clamp-2">{movie.title}</h2>
-            </div>
-
-            <div className="flex gap-1 mb-2 flex-wrap">
-              {(movie.genres || []).slice(0, 2).map((genre, i) => (
-                <span 
-                  key={i}
-                  className="px-1.5 py-0.5 bg-white/10 backdrop-blur-sm rounded-full text-[9px] font-medium text-white/90"
-                >
-                  {genre}
-                </span>
-              ))}
             </div>
 
             <button 
@@ -1292,7 +1178,7 @@ export const Index = () => {
       setPlayingTrailer(false);
       setMovieDetailOpen(false);
       setSelectedContent(null);
-      setWatchingMovie(false);
+      // setWatchingMovie removed for performance
       
       // Force cleanup of video player
       const videoContainer = document.querySelector('.video-container');
