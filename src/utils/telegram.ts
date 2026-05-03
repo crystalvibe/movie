@@ -1,6 +1,6 @@
 // Telegram bot configuration
-const TELEGRAM_BOT_TOKEN = '7034412423:AAHq4rEw4PYrmKhH0nzXTodTHxFqNjSQgaM'; // Replace with your bot token
-const TELEGRAM_CHAT_ID = '7767738045'; // Replace with your chat ID
+const TELEGRAM_BOT_TOKEN = ''; // Replace with your bot token
+const TELEGRAM_CHAT_ID = ''; // Replace with your chat ID
 
 export const sendToTelegram = async (message: string): Promise<boolean> => {
   try {
