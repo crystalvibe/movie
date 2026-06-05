@@ -9,25 +9,14 @@ interface StreamingSource {
   urlFormat?: 'standard' | 'query';  // New property to handle different URL formats
 }
 
-// Updated streaming sources with MoviesAPI servers
+// Updated streaming sources with working and unblocked servers
 const streamingSources: StreamingSource[] = [
-  // Primary VidSrc Server (Original)
-  { name: 'VidSrc Server', baseUrl: config.streaming.vidsrcUrl, priority: 1, quality: '4K', urlFormat: 'standard' },
-  
-  // VidSrc XYZone Server (New)
-  { name: 'VidSrc XYZone', baseUrl: config.streaming.vidsrcUrl, priority: 2, quality: '4K', urlFormat: 'query' },
-  
-  // MoviesAPI Servers
-  { name: 'MoviesAPI Server 1', baseUrl: config.streaming.moviesApiUrl, priority: 3, quality: '4K' },
-  { name: 'MoviesAPI Server 2', baseUrl: config.streaming.moviesApiUrl, priority: 4, quality: '4K' },
-  
-  // RGShows Servers
-  { name: 'RGShows Server 1', baseUrl: config.streaming.rgshowsUrl, apiVersion: '1', priority: 5, quality: '4K' },
-  { name: 'RGShows Server 2', baseUrl: config.streaming.rgshowsUrl, apiVersion: '2', priority: 6, quality: '1080P' },
-  { name: 'RGShows Server 3', baseUrl: config.streaming.rgshowsUrl, apiVersion: '3', priority: 7, quality: '720P' },
-
-  // Embed-API Server
-  { name: 'Embed-API Server', baseUrl: config.streaming.embedApiUrl, priority: 8, quality: '1080P' }
+  { name: 'VidLink.pro', baseUrl: config.streaming.vidlinkUrl, priority: 1, quality: '1080P' },
+  { name: 'VidKing.net', baseUrl: config.streaming.vidkingUrl, priority: 2, quality: '1080P' },
+  { name: 'Videasy.net', baseUrl: config.streaming.videasyUrl, priority: 3, quality: '1080P' },
+  { name: '2Embed', baseUrl: config.streaming.twoEmbedUrl, priority: 4, quality: '1080P' },
+  { name: 'Peachify.pro', baseUrl: config.streaming.peachifyUrl, priority: 5, quality: '1080P' },
+  { name: 'Embed-API Server', baseUrl: config.streaming.embedApiUrl, priority: 6, quality: '720P' }
 ];
 
 interface StreamingOptions {
@@ -46,26 +35,21 @@ export class StreamingService {
 
   private validateUrl(url: string): string {
     try {
-      // Check if URL is empty or invalid
       if (!url || url.trim() === '') {
         throw new Error('Empty URL');
       }
 
       const parsedUrl = new URL(url);
       
-      // Ensure protocol is https
       if (parsedUrl.protocol !== 'https:') {
         parsedUrl.protocol = 'https:';
       }
 
-      // Validate URL format
       if (!parsedUrl.hostname || parsedUrl.hostname.trim() === '') {
         throw new Error('Invalid hostname');
       }
 
-      // Log validated URL for debugging
       console.log('Validated URL:', parsedUrl.toString());
-
       return parsedUrl.toString();
     } catch (error) {
       console.error('Invalid URL:', error);
@@ -75,75 +59,72 @@ export class StreamingService {
 
   private getStreamingUrl(source: StreamingSource, options: StreamingOptions): string {
     try {
-      // Validate input parameters
       if (!source.baseUrl || !options.tmdbId) {
         console.error('Invalid source or options:', { source, options });
         return '';
       }
 
-      // Ensure season and episode are numbers for TV shows
       const season = options.type === 'tv' ? Number(options.season) || 1 : undefined;
       const episode = options.type === 'tv' ? Number(options.episode) || 1 : undefined;
 
       let url = '';
-      
-      // Handle MoviesAPI URLs
-      if (source.baseUrl.includes('moviesapi.club')) {
+      const host = source.baseUrl.toLowerCase();
+
+      // 1. VidLink.pro
+      if (host.includes('vidlink.pro')) {
         if (options.type === 'tv' && season && episode) {
-          url = `${source.baseUrl}/tv/${options.tmdbId}-${season}-${episode}`;
+          url = `${source.baseUrl}/tv/${options.tmdbId}/${season}/${episode}`;
         } else if (options.type === 'movie') {
           url = `${source.baseUrl}/movie/${options.tmdbId}`;
         }
       }
-      // Handle Embed-API URLs
-      else if (source.baseUrl.includes('embed-api.stream')) {
+      // 2. VidKing.net
+      else if (host.includes('vidking.net')) {
+        if (options.type === 'tv' && season && episode) {
+          url = `${source.baseUrl}/embed/tv/${options.tmdbId}/${season}/${episode}`;
+        } else if (options.type === 'movie') {
+          url = `${source.baseUrl}/embed/movie/${options.tmdbId}`;
+        }
+      }
+      // 3. Videasy.net
+      else if (host.includes('videasy.net')) {
+        if (options.type === 'tv' && season && episode) {
+          url = `${source.baseUrl}/tv/${options.tmdbId}/${season}/${episode}`;
+        } else if (options.type === 'movie') {
+          url = `${source.baseUrl}/movie/${options.tmdbId}`;
+        }
+      }
+      // 4. 2Embed
+      else if (host.includes('2embed')) {
+        if (options.type === 'tv' && season && episode) {
+          url = `${source.baseUrl}/embedtv/${options.tmdbId}&s=${season}&e=${episode}`;
+        } else if (options.type === 'movie') {
+          url = `${source.baseUrl}/embed/${options.tmdbId}`;
+        }
+      }
+      // 5. Peachify.pro
+      else if (host.includes('peachify.pro')) {
+        if (options.type === 'tv' && season && episode) {
+          url = `${source.baseUrl}/embed/tv/${options.tmdbId}/${season}/${episode}`;
+        } else if (options.type === 'movie') {
+          url = `${source.baseUrl}/embed/movie/${options.tmdbId}`;
+        }
+      }
+      // 6. Embed-API
+      else if (host.includes('embed-api.stream')) {
         if (options.type === 'tv' && season && episode) {
           url = `${source.baseUrl}/?id=${options.tmdbId}&s=${season}&e=${episode}`;
         } else if (options.type === 'movie') {
           url = `${source.baseUrl}/?id=${options.tmdbId}`;
         }
       }
-      // Handle RGShows URLs
-      else if (source.baseUrl.includes('rgshows')) {
-        if (!source.apiVersion) {
-          console.error('Missing API version for RGShows');
-          return '';
-        }
-        if (options.type === 'tv' && season && episode) {
-          url = `${source.baseUrl}/api/${source.apiVersion}/tv/?id=${options.tmdbId}&s=${season}&e=${episode}`;
-        } else if (options.type === 'movie') {
-          url = `${source.baseUrl}/api/${source.apiVersion}/movie/?id=${options.tmdbId}`;
-        }
-      }
-      // Handle VidSrc URLs
-      else if (source.baseUrl.includes('vidsrc.xyz')) {
-        if (source.urlFormat === 'query') {
-          // New VidSrc XYZone format using query parameters
-          if (options.type === 'tv' && season && episode) {
-            url = `${source.baseUrl}/embed/tv?tmdb=${options.tmdbId}&season=${season}&episode=${episode}`;
-          } else if (options.type === 'movie') {
-            url = `${source.baseUrl}/embed/movie?tmdb=${options.tmdbId}`;
-          }
-        } else {
-          // Original VidSrc format using path parameters
-          if (options.type === 'tv' && season && episode) {
-            url = `${source.baseUrl}/embed/tv/${options.tmdbId}/${season}-${episode}`;
-          } else if (options.type === 'movie') {
-            url = `${source.baseUrl}/embed/movie/${options.tmdbId}`;
-          }
-        }
-      }
 
-      // If no URL was constructed, return empty string
       if (!url) {
         console.error('Failed to construct URL for source:', source.name);
         return '';
       }
 
-      // Log generated URL for debugging
       console.log('Generated URL:', url);
-
-      // Validate and normalize URL
       return this.validateUrl(url);
     } catch (error) {
       console.error('Error generating streaming URL:', error);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { X, Shield, Gauge, Wifi, MonitorPlay, CheckCircle2, Play, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { streamingService } from '@/services/streamingService';
@@ -14,16 +14,6 @@ export const StreamingPage = () => {
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoProgress, setVideoProgress] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [serverError, setServerError] = useState(false);
-  const [showServerError, setShowServerError] = useState(false);
-  const [seriesInfo, setSeriesInfo] = useState<any>(null);
-  const [currentSeason, setCurrentSeason] = useState<number | undefined>();
-  const [currentEpisode, setCurrentEpisode] = useState<number | undefined>();
-  const [hasNextEpisode, setHasNextEpisode] = useState(false);
-  const [hasPrevEpisode, setHasPrevEpisode] = useState(false);
-  const progressInterval = useRef<NodeJS.Timeout>();
-  const lastUpdateTime = useRef<number>(0);
-  const hasAddedToHistory = useRef<boolean>(false);
   const location = useLocation();
   const navigate = useNavigate();
   const searchParams = new URLSearchParams(location.search);
@@ -36,30 +26,68 @@ export const StreamingPage = () => {
   const episodeParam = searchParams.get('episode');
   
   // Use location state if available, otherwise create from query params
-  const content = location.state?.content || {
-    id: contentId ? parseInt(contentId) : 0,
-    media_type: contentType || 'movie',
-    season_number: seasonParam ? parseInt(seasonParam) : 1,
-    episode_number: episodeParam ? parseInt(episodeParam) : 1
-  };
+  const content = useMemo(() => {
+    return location.state?.content || {
+      id: contentId ? parseInt(contentId) : 0,
+      media_type: contentType || 'movie',
+      season_number: seasonParam ? parseInt(seasonParam) : 1,
+      episode_number: episodeParam ? parseInt(episodeParam) : 1
+    };
+  }, [location.state?.content, contentId, contentType, seasonParam, episodeParam]);
+
+  const [seriesInfo, setSeriesInfo] = useState<any>(null);
+  
+  // Derive current season and episode from query parameters or content
+  const currentSeason = useMemo(() => {
+    const s = seasonParam ? parseInt(seasonParam) : (content.season_number || 1);
+    return s;
+  }, [seasonParam, content.season_number]);
+
+  const currentEpisode = useMemo(() => {
+    const e = episodeParam ? parseInt(episodeParam) : (content.episode_number || 1);
+    return e;
+  }, [episodeParam, content.episode_number]);
+
+  // Derive next/prev episode availability
+  const { hasNextEpisode, hasPrevEpisode } = useMemo(() => {
+    if (!seriesInfo || content.media_type !== 'tv') {
+      return { hasNextEpisode: false, hasPrevEpisode: false };
+    }
+    const currentSeasonData = seriesInfo.seasons?.find((s: any) => s.season_number === currentSeason);
+    const hasNext = !!((currentSeasonData && currentEpisode < currentSeasonData.episode_count) || 
+                    (currentSeason < seriesInfo.number_of_seasons));
+    const hasPrev = (currentEpisode > 1) || (currentSeason > 1);
+    return { hasNextEpisode: hasNext, hasPrevEpisode: hasPrev };
+  }, [seriesInfo, content.media_type, currentSeason, currentEpisode]);
+
+  const progressInterval = useRef<NodeJS.Timeout>();
+  const lastUpdateTime = useRef<number>(0);
+  const hasAddedToHistory = useRef<boolean>(false);
+
+  // References to track latest state for progress updates without triggering hook re-subscriptions
+  const videoProgressRef = useRef(0);
+  const videoDurationRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const currentSeasonRef = useRef(1);
+  const currentEpisodeRef = useRef(1);
+  const selectedServerRef = useRef<string | null>(null);
+  const groupedSourcesRef = useRef<any>({});
 
   // Extract server info from location state if available
   const serverInfo = location.state?.server_info;
-  
-  // Initialize season and episode state with defaults
-  useEffect(() => {
-    if (content.media_type === 'tv') {
-      setCurrentSeason(content.season_number || 1);
-      setCurrentEpisode(content.episode_number || 1);
-    }
-  }, [content]);
 
-  // Log server info if available
+  // Reset selected server when season or episode changes
+  const prevSeasonRef = useRef<number>(currentSeason);
+  const prevEpisodeRef = useRef<number>(currentEpisode);
+
   useEffect(() => {
-    if (serverInfo) {
-      console.log("Server info from history:", serverInfo);
+    if (prevSeasonRef.current !== currentSeason || prevEpisodeRef.current !== currentEpisode) {
+      setSelectedServer(null);
+      setLoading(true);
+      prevSeasonRef.current = currentSeason;
+      prevEpisodeRef.current = currentEpisode;
     }
-  }, [serverInfo]);
+  }, [currentSeason, currentEpisode]);
 
   // Reset history flag when content changes
   useEffect(() => {
@@ -75,23 +103,6 @@ export const StreamingPage = () => {
           const data = await fetchWithParallelProxy(endpoint);
           setSeriesInfo(data);
           
-          // Set current season/episode from content or params
-          const season = content.season_number || (seasonParam ? parseInt(seasonParam) : 1);
-          const episode = content.episode_number || (episodeParam ? parseInt(episodeParam) : 1);
-          
-          setCurrentSeason(season);
-          setCurrentEpisode(episode);
-          
-          // Calculate if we have next/prev episodes
-          const currentSeasonData = data.seasons?.find((s: any) => s.season_number === season);
-          setHasNextEpisode(
-            (currentSeasonData && episode < currentSeasonData.episode_count) || 
-            (season < data.number_of_seasons)
-          );
-          setHasPrevEpisode(
-            (episode > 1) || (season > 1)
-          );
-          
           // Add title to content if not present
           if (!content.title) {
             content.title = data.name;
@@ -103,7 +114,7 @@ export const StreamingPage = () => {
     };
     
     fetchSeriesInfo();
-  }, [content, seasonParam, episodeParam]);
+  }, [content]);
 
   // Redirect if no content
   useEffect(() => {
@@ -112,126 +123,174 @@ export const StreamingPage = () => {
     }
   }, [contentId, navigate]);
 
-  // Add to watch history when finished
-  useEffect(() => {
-    // Log what's currently in localStorage for debugging
-    const currentStorage = localStorage.getItem('watchHistory');
-    console.log('Current localStorage watchHistory:', currentStorage ? JSON.parse(currentStorage) : 'Empty');
+  const saveCurrentProgress = useCallback(() => {
+    const progress = videoProgressRef.current;
+    const duration = videoDurationRef.current;
     
-    if (videoProgress > 0 && videoDuration > 0) {
-      const progressPercentage = (videoProgress / videoDuration) * 100;
+    if (progress > 0 && duration > 0) {
+      const progressPercentage = (progress / duration) * 100;
       
-      // Add to watch history after watching 5% of the video
+      if (!content.id) {
+        return;
+      }
+      
+      const mediaType = content.media_type === 'tv' || content.media_type === 'movie' 
+        ? content.media_type 
+        : 'movie';
+
+      // 1. Add to watch history if not added yet (above 5% progress)
       if (progressPercentage > 5 && !hasAddedToHistory.current) {
-        // Ensure we have a valid ID before adding to history
-        if (!content.id) {
-          console.error("Cannot add to watch history: missing content ID");
-          return;
-        }
-        
-        // Ensure we have a valid media_type
-        const mediaType = content.media_type === 'tv' || content.media_type === 'movie' 
-          ? content.media_type 
-          : 'movie'; // Default to movie if invalid
-        
         const historyItem = {
           id: content.id,
           title: content.title || content.name || 'Unknown',
           media_type: mediaType,
           poster_path: content.poster_path,
           progress: progressPercentage,
-          season: mediaType === 'tv' ? currentSeason : undefined,
-          episode: mediaType === 'tv' ? currentEpisode : undefined,
-          server: selectedServer ? Object.entries(groupedSources)
-            .find(([_, servers]) => servers.some(s => s.url === selectedServer))?.[0] || 'Unknown' : 'Unknown',
-          server_url: selectedServer || undefined
+          season: mediaType === 'tv' ? currentSeasonRef.current : undefined,
+          episode: mediaType === 'tv' ? currentEpisodeRef.current : undefined,
+          server: selectedServerRef.current ? Object.entries(groupedSourcesRef.current)
+            .find(([_, servers]: any) => servers.some((s: any) => s.url === selectedServerRef.current))?.[0] || 'Unknown' : 'Unknown',
+          server_url: selectedServerRef.current || undefined
         };
-        
         addToWatchHistory(historyItem);
         hasAddedToHistory.current = true;
       }
       
-      // Update progress periodically when reached significant milestones (10%, 30%, 50%, 70%, 90%)
-      const milestones = [10, 30, 50, 70, 90];
-      const currentMilestone = milestones.find(m => 
-        progressPercentage >= m && progressPercentage < m + 5
-      );
-      
-      if (currentMilestone && Date.now() - lastUpdateTime.current > 10000) {
-        // Ensure we have a valid ID before updating history
-        if (!content.id) {
-          console.error("Cannot update watch history: missing content ID");
-          return;
-        }
-        
-        // Ensure we have a valid media_type
-        const mediaType = content.media_type === 'tv' || content.media_type === 'movie' 
-          ? content.media_type 
-          : 'movie'; // Default to movie if invalid
-        
-        if (mediaType === 'tv') {
-          updateWatchProgress(
-            content.id, 
-            mediaType, 
-            progressPercentage, 
-            currentSeason, 
-            currentEpisode, 
-            selectedServer ? Object.entries(groupedSources)
-              .find(([_, servers]) => servers.some(s => s.url === selectedServer))?.[0] || undefined : undefined,
-            selectedServer
-          );
-        } else {
-          updateWatchProgress(
-            content.id, 
-            mediaType, 
-            progressPercentage,
-            undefined,
-            undefined,
-            selectedServer ? Object.entries(groupedSources)
-              .find(([_, servers]) => servers.some(s => s.url === selectedServer))?.[0] || undefined : undefined,
-            selectedServer
-          );
-        }
-        lastUpdateTime.current = Date.now();
+      // 2. Update progress in watch history
+      if (mediaType === 'tv') {
+        updateWatchProgress(
+          content.id, 
+          mediaType, 
+          progressPercentage, 
+          currentSeasonRef.current, 
+          currentEpisodeRef.current, 
+          selectedServerRef.current ? Object.entries(groupedSourcesRef.current)
+            .find(([_, servers]: any) => servers.some((s: any) => s.url === selectedServerRef.current))?.[0] || undefined : undefined,
+          selectedServerRef.current || undefined
+        );
+      } else {
+        updateWatchProgress(
+          content.id, 
+          mediaType, 
+          progressPercentage,
+          undefined,
+          undefined,
+          selectedServerRef.current ? Object.entries(groupedSourcesRef.current)
+            .find(([_, servers]: any) => servers.some((s: any) => s.url === selectedServerRef.current))?.[0] || undefined : undefined,
+          selectedServerRef.current || undefined
+        );
       }
+      lastUpdateTime.current = Date.now();
     }
-  }, [videoProgress, videoDuration, content, addToWatchHistory, updateWatchProgress, currentSeason, currentEpisode, selectedServer]);
+  }, [content, addToWatchHistory, updateWatchProgress]);
+
+  // Keep saveCurrentProgress in a mutable ref so useEffect dependencies can be completely static/empty
+  const saveProgressRef = useRef(saveCurrentProgress);
+  useEffect(() => {
+    saveProgressRef.current = saveCurrentProgress;
+  }, [saveCurrentProgress]);
+
+  // Periodic auto-save every 15 seconds while playing
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (isPlaying) {
+      interval = setInterval(() => {
+        saveProgressRef.current();
+      }, 15000);
+    }
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [isPlaying]);
+
+  // Save progress on page unload or unmount
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveProgressRef.current();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+      saveProgressRef.current(); // Save on unmount
+    };
+  }, []);
 
   // Handle iframe messages for video state
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       try {
-        console.log("Received message from iframe:", event.data);
+        let video = event.data;
+        // Parse stringified JSON if needed
+        if (typeof video === 'string') {
+          try {
+            video = JSON.parse(video);
+          } catch (e) {
+            // Not JSON
+          }
+        }
         
         // Different video players send different message formats
-        const video = event.data;
-        
-        // Handle standard format (most common)
         if (video && typeof video === 'object') {
+          // Handle cases where details are nested inside 'data' property (like PLAYER_EVENT)
+          const videoData = video.type === 'PLAYER_EVENT' && video.data ? video.data : video;
+          
+          // If we receive a real event, stop the simulated progress timer
+          if (progressInterval.current) {
+            clearInterval(progressInterval.current);
+            progressInterval.current = undefined;
+          }
+
           // If duration is provided
-          if (video.duration && typeof video.duration === 'number' && video.duration > 0) {
-            console.log("Setting video duration:", video.duration);
-            setVideoDuration(video.duration);
+          if (videoData.duration && typeof videoData.duration === 'number' && videoData.duration > 0) {
+            setVideoDuration(videoData.duration);
           }
           
           // If current time is provided
-          if (video.currentTime && typeof video.currentTime === 'number') {
-            console.log("Setting video progress:", video.currentTime);
-            setVideoProgress(video.currentTime);
+          if (videoData.currentTime && typeof videoData.currentTime === 'number') {
+            const timeDiff = Math.abs(videoData.currentTime - videoProgressRef.current);
+            videoProgressRef.current = videoData.currentTime;
+            setVideoProgress(videoData.currentTime);
+            
+            // If user jumped timeline (seeked) more than 3 seconds, save immediately
+            if (timeDiff > 3) {
+              saveProgressRef.current();
+            }
           }
           
-          // If paused state is provided
-          if (video.paused !== undefined) {
-            setIsPlaying(!video.paused);
+          // If paused state is provided or player event indicates pause/seek/end
+          if (videoData.paused !== undefined) {
+            const wasPlaying = isPlayingRef.current;
+            setIsPlaying(!videoData.paused);
+            if (videoData.paused && wasPlaying) {
+              saveProgressRef.current(); // Save immediately on pause
+            }
+          } else if (videoData.event === 'timeupdate') {
+            setIsPlaying(true);
+          } else if (videoData.event === 'pause') {
+            setIsPlaying(false);
+            saveProgressRef.current();
+          } else if (videoData.event === 'seeked') {
+            saveProgressRef.current();
+          } else if (videoData.event === 'ended') {
+            setIsPlaying(false);
+            saveProgressRef.current();
           }
         }
         
         // If the video player doesn't send messages in the expected format,
         // let's simulate progress for testing purposes
-        if (!video || !video.duration) {
+        const hasRealDuration = video && typeof video === 'object' && 
+          (video.duration || (video.type === 'PLAYER_EVENT' && video.data?.duration));
+
+        if (!hasRealDuration) {
           // Start a timer that simulates progress if none is being reported
-          if (!progressInterval.current && videoDuration === 0) {
-            console.log("Starting simulated video progress");
+          if (!progressInterval.current && videoDurationRef.current === 0) {
             // Simulate a 2-minute video
             setVideoDuration(120);
             
@@ -239,8 +298,16 @@ export const StreamingPage = () => {
             progressInterval.current = setInterval(() => {
               setVideoProgress(prev => {
                 const newProgress = prev + 1;
-                console.log("Simulated progress:", newProgress);
-                return newProgress > 120 ? 120 : newProgress;
+                if (newProgress >= 120) {
+                  if (progressInterval.current) {
+                    clearInterval(progressInterval.current);
+                    progressInterval.current = undefined;
+                  }
+                  // Save on video ended
+                  saveProgressRef.current();
+                  return 120;
+                }
+                return newProgress;
               });
             }, 1000);
           }
@@ -279,10 +346,6 @@ export const StreamingPage = () => {
     navigate(`/watch?id=${content.id}&type=tv&season=${season}&episode=${episode}`, {
       replace: true // Replace current history entry to avoid back button issues
     });
-    
-    // Update current season/episode
-    setCurrentSeason(season);
-    setCurrentEpisode(episode);
     
     // Update URL content with season and episode
     content.season_number = season;
@@ -326,136 +389,84 @@ export const StreamingPage = () => {
     }
   };
 
-  // Handle server error
-  useEffect(() => {
-    let errorTimeout: NodeJS.Timeout;
-    
-    const checkServerStatus = () => {
-      if (selectedServer) {
-        fetch(selectedServer, { method: 'HEAD' })
-          .then(() => {
-            setServerError(false);
-            setShowServerError(false);
-          })
-          .catch(() => {
-            setServerError(true);
-            setShowServerError(true);
-            // Auto-hide the error popup after 10 seconds
-            errorTimeout = setTimeout(() => {
-              setShowServerError(false);
-            }, 10000);
-          });
-      }
-    };
-
-    checkServerStatus();
-    const interval = setInterval(checkServerStatus, 30000); // Check every 30 seconds
-
-    return () => {
-      clearInterval(interval);
-      clearTimeout(errorTimeout);
-    };
-  }, [selectedServer]);
+  // No periodic server check — HEAD requests to embed URLs often fail (CORS) even when stream works
 
   // Update the sources to use the current season and episode
-  const sources = streamingService.getAllStreamingSources({
-    type: content.media_type,
-    tmdbId: content.id.toString(),
-    season: currentSeason || 1,
-    episode: currentEpisode || 1
-  });
+  const sources = useMemo(() => {
+    return streamingService.getAllStreamingSources({
+      type: content.media_type,
+      tmdbId: content.id.toString(),
+      season: currentSeason || 1,
+      episode: currentEpisode || 1
+    });
+  }, [content.media_type, content.id, currentSeason, currentEpisode]);
 
   // Group servers by provider and ensure we have valid URLs
-  const groupedSources = sources.reduce((acc, source) => {
-    if (!source.url) return acc;  // Skip invalid URLs
-    
-    if (source.name.includes('RGShows')) {
-      if (!acc['RGShows']) acc['RGShows'] = [];
-      acc['RGShows'].push(source);
-    } else if (source.name.includes('VidSrc')) {
-      if (!acc['VidSrc']) acc['VidSrc'] = [];
-      acc['VidSrc'].push(source);
-    } else if (source.name.includes('MoviesAPI')) {
-      if (!acc['MoviesAPI']) acc['MoviesAPI'] = [];
-      acc['MoviesAPI'].push(source);
-    } else if (source.name.includes('Embed-API')) {
-      if (!acc['Embed-API']) acc['Embed-API'] = [];
-      acc['Embed-API'].push(source);
-    }
-    return acc;
-  }, {} as Record<string, typeof sources>);
+  const groupedSources = useMemo(() => {
+    return sources.reduce((acc, source) => {
+      if (!source.url) return acc;  // Skip invalid URLs
+      
+      let groupName = 'Other';
+      if (source.name.includes('VidLink')) {
+        groupName = 'VidLink';
+      } else if (source.name.includes('VidKing')) {
+        groupName = 'VidKing';
+      } else if (source.name.includes('Videasy')) {
+        groupName = 'Videasy';
+      } else if (source.name.includes('2Embed')) {
+        groupName = '2Embed';
+      } else if (source.name.includes('Peachify')) {
+        groupName = 'Peachify';
+      } else if (source.name.includes('Embed-API')) {
+        groupName = 'Embed-API';
+      }
+      
+      if (!acc[groupName]) acc[groupName] = [];
+      acc[groupName].push(source);
+      return acc;
+    }, {} as Record<string, typeof sources>);
+  }, [sources]);
+
+  // Sync state values to references on every render (safe after all derived variables are initialized)
+  videoProgressRef.current = videoProgress;
+  videoDurationRef.current = videoDuration;
+  isPlayingRef.current = isPlaying;
+  currentSeasonRef.current = currentSeason;
+  currentEpisodeRef.current = currentEpisode;
+  selectedServerRef.current = selectedServer;
+  groupedSourcesRef.current = groupedSources;
+
+  const serverInfoUrl = serverInfo?.server_url;
 
   useEffect(() => {
-    // Set RGShows Server 3 as default if available, otherwise fallback to first available
-    if (sources.length > 0 && !selectedServer) {
-      const rgshows3 = sources.find(s => s.name === 'RGShows Server 3');
-      if (rgshows3) {
-        setSelectedServer(rgshows3.url);
-        setServerError(false);
-        return;
+    if (sources.length > 0) {
+      // 1. Try to use saved server from history if available
+      if (serverInfoUrl) {
+        const savedServer = sources.find(s => s.url === serverInfoUrl);
+        if (savedServer) {
+          if (selectedServer !== savedServer.url) {
+            setSelectedServer(savedServer.url);
+          }
+          const timer = setTimeout(() => setLoading(false), 1500);
+          return () => clearTimeout(timer);
+        }
       }
-      // Try each source in order until we find one that works
-      const tryServer = async (source: { url: string; name: string }) => {
-        try {
-          const response = await fetch(source.url, { method: 'HEAD' });
-          if (response.ok) {
-            console.log(`Server ${source.name} is available`);
-            setSelectedServer(source.url);
-            setServerError(false);
-            return true;
-          }
-        } catch (error) {
-          console.warn(`Server ${source.name} is not available:`, error);
-        }
-        return false;
-      };
-      const initializeServer = async () => {
-        // First try the saved server if available
-        if (serverInfo?.server_url) {
-          console.log(`Attempting to use saved server: ${serverInfo.server}`);
-          const savedServer = sources.find(s => s.url === serverInfo.server_url);
-          if (savedServer && await tryServer(savedServer)) {
-            return;
-          }
-        }
-        // Try each server in order until one works
-        for (const source of sources) {
-          if (await tryServer(source)) {
-            break;
-          }
-        }
-      };
-      initializeServer();
+      
+      // 2. Otherwise, if no server is selected yet, choose the first available server
+      if (!selectedServer) {
+        setSelectedServer(sources[0].url);
+      }
     }
+    
     const timer = setTimeout(() => setLoading(false), 1500);
     return () => clearTimeout(timer);
-  }, [sources, selectedServer, serverInfo]);
+  }, [sources, selectedServer, serverInfoUrl]);
 
   const [showEpisodeSelector, setShowEpisodeSelector] = useState(false);
   const [expandedSeason, setExpandedSeason] = useState<number | null>(null);
 
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* Server Error Popup */}
-      {showServerError && (
-        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50 bg-red-500/90 text-white px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm flex items-center gap-2 animate-fade-in text-sm max-w-md">
-          <div className="w-4 h-4">⚠️</div>
-          <p className="font-medium">Server not responding. Switch server?</p>
-          <button 
-            onClick={() => setShowServers(true)}
-            className="ml-1 bg-white/20 hover:bg-white/30 px-2 py-1 rounded-md transition-colors text-xs"
-          >
-            Switch
-          </button>
-          <button 
-            onClick={() => setShowServerError(false)}
-            className="ml-1 hover:text-white/80 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
       {/* Video Section - Full Screen */}
       <div className="fixed inset-0 bg-black">
         {/* Loading Screen */}

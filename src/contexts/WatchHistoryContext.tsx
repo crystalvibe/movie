@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, ReactNode } from 'react';
 import { fetchWithParallelProxy } from '@/utils/proxyService';
 
 interface WatchHistoryItem {
@@ -90,7 +90,7 @@ export const WatchHistoryProvider: React.FC<WatchHistoryProviderProps> = ({ chil
     } catch {}
   }, [watchHistory]);
 
-  const addToWatchHistory = (item: Omit<WatchHistoryItem, 'watched_at'>) => {
+  const addToWatchHistory = useCallback((item: Omit<WatchHistoryItem, 'watched_at'>) => {
     setWatchHistory(prevHistory => {
       try {
         let newHistory = [...prevHistory];
@@ -105,9 +105,9 @@ export const WatchHistoryProvider: React.FC<WatchHistoryProviderProps> = ({ chil
         return prevHistory;
       }
     });
-  };
+  }, []);
 
-  const removeFromWatchHistory = (id: number, media_type: string) => {
+  const removeFromWatchHistory = useCallback((id: number, media_type: string) => {
     setWatchHistory(prevHistory => {
       const filteredHistory = prevHistory.filter(item => !(item.id === id && item.media_type === media_type));
       try {
@@ -115,24 +115,24 @@ export const WatchHistoryProvider: React.FC<WatchHistoryProviderProps> = ({ chil
       } catch {}
       return filteredHistory;
     });
-  };
+  }, []);
 
-  const clearWatchHistory = () => {
+  const clearWatchHistory = useCallback(() => {
     setWatchHistory([]);
     try {
       localStorage.setItem('watchHistory', JSON.stringify([]));
     } catch {}
-  };
+  }, []);
 
-  const isInWatchHistory = (id: number, media_type: string) => {
+  const isInWatchHistory = useCallback((id: number, media_type: string) => {
     return watchHistory.some(item => item.id === id && item.media_type === media_type);
-  };
+  }, [watchHistory]);
 
-  const getWatchHistoryItem = (id: number, media_type: string) => {
+  const getWatchHistoryItem = useCallback((id: number, media_type: string) => {
     return watchHistory.find(item => item.id === id && item.media_type === media_type);
-  };
+  }, [watchHistory]);
 
-  const updateWatchProgress = (
+  const updateWatchProgress = useCallback((
     id: number,
     media_type: string,
     progress: number,
@@ -142,6 +142,22 @@ export const WatchHistoryProvider: React.FC<WatchHistoryProviderProps> = ({ chil
     server_url?: string
   ) => {
     setWatchHistory(prevHistory => {
+      const existingItem = prevHistory.find(item => item.id === id && item.media_type === media_type);
+      if (!existingItem) {
+        return prevHistory;
+      }
+
+      // Check if anything actually changed (with 0.01 tolerance for progress float values)
+      const progressChanged = Math.abs((existingItem.progress || 0) - progress) > 0.01;
+      const seasonChanged = season !== undefined && existingItem.season !== season;
+      const episodeChanged = episode !== undefined && existingItem.episode !== episode;
+      const serverChanged = server !== undefined && existingItem.server !== server;
+      const serverUrlChanged = server_url !== undefined && existingItem.server_url !== server_url;
+
+      if (!progressChanged && !seasonChanged && !episodeChanged && !serverChanged && !serverUrlChanged) {
+        return prevHistory;
+      }
+
       const updated = prevHistory.map(item => {
         if (item.id === id && item.media_type === media_type) {
           return {
@@ -151,6 +167,7 @@ export const WatchHistoryProvider: React.FC<WatchHistoryProviderProps> = ({ chil
             episode: episode ?? item.episode,
             server: server ?? item.server,
             server_url: server_url ?? item.server_url,
+            watched_at: Date.now()
           };
         }
         return item;
@@ -160,18 +177,18 @@ export const WatchHistoryProvider: React.FC<WatchHistoryProviderProps> = ({ chil
       } catch {}
       return updated;
     });
-  };
+  }, []);
 
-  const getLastWatchedEpisode = (showId: number) => {
+  const getLastWatchedEpisode = useCallback((showId: number) => {
     const episodes = watchHistory.filter(item => item.media_type === 'tv' && item.id === showId && item.season && item.episode);
     if (episodes.length === 0) return null;
     const last = episodes.reduce((a, b) => (a.watched_at > b.watched_at ? a : b));
     return last.season && last.episode ? { season: last.season, episode: last.episode } : null;
-  };
+  }, [watchHistory]);
 
-  const isEpisodeWatched = (showId: number, season: number, episode: number) => {
+  const isEpisodeWatched = useCallback((showId: number, season: number, episode: number) => {
     return watchHistory.some(item => item.media_type === 'tv' && item.id === showId && item.season === season && item.episode === episode);
-  };
+  }, [watchHistory]);
 
   // Memoize context value to prevent unnecessary re-renders
   const value = useMemo(
@@ -186,7 +203,17 @@ export const WatchHistoryProvider: React.FC<WatchHistoryProviderProps> = ({ chil
       getLastWatchedEpisode,
       isEpisodeWatched,
     }),
-    [watchHistory]
+    [
+      watchHistory,
+      addToWatchHistory,
+      removeFromWatchHistory,
+      clearWatchHistory,
+      isInWatchHistory,
+      getWatchHistoryItem,
+      updateWatchProgress,
+      getLastWatchedEpisode,
+      isEpisodeWatched,
+    ]
   );
 
   return <WatchHistoryContext.Provider value={value}>{children}</WatchHistoryContext.Provider>;

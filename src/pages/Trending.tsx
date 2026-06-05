@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Star, Play, Film, Tv, TrendingUp, X, Volume2, VolumeX, Globe, Plus, Heart, ChevronRight, ChevronLeft } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Navigation } from '../components/Navigation';
-import { StreamingModal } from '@/components/StreamingModal';
 import { cn } from '@/lib/utils';
 import { NotificationToast } from '../components/NotificationToast';
 import { useInView } from 'react-intersection-observer';
@@ -469,7 +468,6 @@ const Trending = () => {
   const [movieDetailOpen, setMovieDetailOpen] = useState(false);
   const [watchingMovie, setWatchingMovie] = useState(false);
   const { addToList, removeFromList, isInList, animatingItems } = useMyList();
-  const [isStreamingModalOpen, setIsStreamingModalOpen] = useState(false);
   const [selectedSeason, setSelectedSeason] = useState(1);
   const [selectedEpisode, setSelectedEpisode] = useState(1);
   const [showSeasonSelector, setShowSeasonSelector] = useState(false);
@@ -841,19 +839,11 @@ const Trending = () => {
           from: 'trending'
         }
       });
-
-      // Close streaming modal last to ensure smooth transition
-      setIsStreamingModalOpen(false);
     } catch (error) {
       console.error('Error starting content:', error);
       setWatchError(error instanceof Error ? error.message : 'Unable to play this content right now');
       setTimeout(() => setWatchError(null), 4000);
     }
-  };
-
-  const handleStartWatching = () => {
-    setIsStreamingModalOpen(true);
-    setShowSeasonSelector(false);
   };
 
   const handleCloseDetail = () => {
@@ -862,10 +852,6 @@ const Trending = () => {
     setSelectedContent(null);
     setWatchingMovie(false);
     setShowSeasonSelector(false);
-  };
-
-  const handleCloseStreamingModal = () => {
-    setIsStreamingModalOpen(false);
   };
 
   const handleListAction = (item) => {
@@ -1325,24 +1311,6 @@ const Trending = () => {
             </section>
         </div>
       </div>
-
-      {/* Streaming Modal */}
-      {selectedContent && (
-        <StreamingModal
-          isOpen={isStreamingModalOpen}
-          onClose={handleCloseStreamingModal}
-          content={{
-            id: selectedContent.id,
-            title: selectedContent.title,
-            name: selectedContent.name,
-            media_type: (selectedContent.type || selectedContent.media_type || "movie") as "movie" | "tv",
-            release_date: selectedContent.release_date,
-            first_air_date: selectedContent.first_air_date,
-            season_number: selectedContent.type === 'tv' ? selectedSeason : undefined,
-            episode_number: selectedContent.type === 'tv' ? selectedEpisode : undefined
-          }}
-        />
-      )}
 
       {/* Error Toast */}
       {watchError && (

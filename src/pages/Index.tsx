@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Star, Play, Film, X, Volume2, VolumeX, Plus } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Navigation } from '../components/Navigation';
-import { StreamingModal } from '@/components/StreamingModal';
 import { cn } from '@/lib/utils';
 import { NotificationToast } from '../components/NotificationToast';
 // Removed react-intersection-observer to reduce bundle size
@@ -205,7 +204,6 @@ export const Index = () => {
   // Optional state - can be disabled for better performance
   const [retryCount, setRetryCount] = useState(0);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [isStreamingModalOpen, setIsStreamingModalOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { addToList, removeFromList, isInList, animatingItems } = useMyList();
   
@@ -321,64 +319,37 @@ export const Index = () => {
           throw new Error('No suitable movies found. Please try again later.');
         }
 
-        // Get basic movie information only (no videos/keywords to reduce load time)
-        const moviePromises = combinedMovies.map(async (movie) => {
+        // Transform the data with enhanced security and validation without heavy upfront details fetch
+        const transformedMovies = await Promise.all(combinedMovies.map(async (movie, index) => {
           try {
-            // Only fetch basic details, skip videos and keywords for faster loading
-            const details = await fetchWithRetry(`${BASE_URL}/movie/${movie.id}?api_key=${TMDB_API_KEY}`);
-            return { 
-              ...movie, 
-              ...details,
-              tmdb_id: movie.id,
-              originalLanguage: movie.original_language
-            };
-          } catch (error) {
-            console.error(`Error fetching details for movie ${movie.id}:`, error);
-            // Return basic movie info if details fetch fails
-            return { ...movie, tmdb_id: movie.id };
-          }
-        });
-
-        const moviesWithDetails = await Promise.all(moviePromises);
-        
-        // Transform the data with enhanced security and validation
-        const transformedMovies = await Promise.all(moviesWithDetails.map(async (movie, index) => {
-          try {
-            const trailer = movie.videos?.results?.find(v => 
-              v.type === "Trailer" && v.site === "YouTube" && v.official === true
-            ) || movie.videos?.results?.find(v => 
-              v.type === "Trailer" && v.site === "YouTube"
-            ) || movie.videos?.results?.[0];
-
-            const previewUrl = trailer 
-              ? `https://www.youtube.com/embed/${trailer.key}?autoplay=1&controls=1&showinfo=0&rel=0&iv_load_policy=3&modestbranding=1&enablejsapi=1&version=3&playerapiid=ytplayer&mute=0&loop=1&playlist=${trailer.key}&origin=${window.location.origin}`
-              : `https://image.tmdb.org/t/p/original${movie.backdrop_path}`;
+            // Set fallback preview URL initially
+            const previewUrl = `https://image.tmdb.org/t/p/original${movie.backdrop_path}`;
 
             const movieData: Movie = {
-              id: movie.tmdb_id,
+              id: movie.id,
               title: movie.title || 'Untitled Movie',
               desc: movie.overview || 'No description available.',
               preview: previewUrl,
               color: getColorSchemeForMovie(index),
               rating: (movie.vote_average / 2).toFixed(1),
               year: movie.release_date ? new Date(movie.release_date).getFullYear().toString() : "2024",
-              duration: movie.runtime ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m` : "2h 0m",
+              duration: "2h 00m", // Default duration, will be loaded dynamically
               poster: movie.poster_path 
                 ? `https://image.tmdb.org/t/p/w780${movie.poster_path}`
                 : "",
-              genres: movie.genres?.map(g => g.name) || [],
-              isYoutubeTrailer: !!trailer,
-              videos: movie.videos || { results: [] },
+              genres: [], // Loaded dynamically
+              isYoutubeTrailer: false,
+              videos: { results: [] },
               backdrop_path: movie.backdrop_path,
               release_date: movie.release_date,
               vote_average: movie.vote_average,
               socialScore: movie.score,
               region: movie.region,
-              original_language: movie.originalLanguage,
+              original_language: movie.original_language,
               media_type: 'movie' // Always set as 'movie' for this page
             };
 
-            const contentHash = await generateContentHash(movie.tmdb_id.toString());
+            const contentHash = await generateContentHash(movie.id.toString());
             movieData.contentHash = contentHash;
             
             return movieData;
@@ -645,7 +616,7 @@ export const Index = () => {
   const currentMovies = loading ? [] : categories['Featured'];
   const currentMovie = currentMovies[activeMovie];
 
-  // Update function to handle watch click from movie card with better error handling
+  // Update function to handle watch click from movie card with dynamic detail fetching
   const handleWatchClick = async (movie?: Movie) => {
     // Prevent multiple rapid clicks
     if (isWatchLoading) {
@@ -677,10 +648,38 @@ export const Index = () => {
       setMovieDetailOpen(true);
       setPlayingTrailer(true);
 
-      // Skip background fetching for better performance - use existing data only
-      // if (!movie.videos?.results?.length || !movie.overview) {
-      //   // Background fetching disabled for performance
-      // }
+      // Fetch additional details (videos, runtime, genres) dynamically in background
+      if (!movie.videos?.results?.length || !movie.genres?.length || movie.duration === "2h 00m") {
+        const endpoint = `/movie/${movie.id}?append_to_response=videos,credits`;
+        fetchWithParallelProxy(endpoint)
+          .then(async (details) => {
+            const trailer = details.videos?.results?.find((v: any) => 
+              v.type === "Trailer" && v.site === "YouTube" && v.official === true
+            ) || details.videos?.results?.find((v: any) => 
+              v.type === "Trailer" && v.site === "YouTube"
+            ) || details.videos?.results?.[0];
+
+            const previewUrl = trailer 
+              ? `https://www.youtube.com/embed/${trailer.key}?autoplay=1&controls=1&showinfo=0&rel=0&iv_load_policy=3&modestbranding=1&enablejsapi=1&version=3&playerapiid=ytplayer&mute=0&loop=1&playlist=${trailer.key}&origin=${window.location.origin}`
+              : `https://image.tmdb.org/t/p/original${movie.backdrop_path}`;
+
+            const updatedMovie: Movie = {
+              ...movie,
+              genres: details.genres?.map((g: any) => g.name) || [],
+              duration: details.runtime ? `${Math.floor(details.runtime / 60)}h ${details.runtime % 60}m` : "2h 00m",
+              videos: details.videos || { results: [] },
+              isYoutubeTrailer: !!trailer,
+              preview: previewUrl
+            };
+
+            // Update selected content and the movies list cache
+            setSelectedContent(updatedMovie);
+            setMovies(prev => prev.map(m => m.id === movie.id ? updatedMovie : m));
+          })
+          .catch(err => {
+            console.error('Error fetching details dynamically:', err);
+          });
+      }
 
       // Check content integrity in background
       verifyContentIntegrity(movie).catch(error => {
@@ -709,7 +708,6 @@ export const Index = () => {
       // First close all modals
       setMovieDetailOpen(false);
       setPlayingTrailer(false);
-      // setWatchingMovie removed for performance
       
       // Verify content integrity before navigating
       const isValid = await verifyContentIntegrity(selectedContent);
@@ -748,9 +746,6 @@ export const Index = () => {
           from: 'index'
         }
       });
-
-      // Close streaming modal last to ensure smooth transition
-      setIsStreamingModalOpen(false);
     } catch (error) {
       console.error('Error starting movie:', error);
       setWatchError(error instanceof Error ? error.message : 'Unable to play this movie right now');
@@ -762,14 +757,7 @@ export const Index = () => {
   const handleCloseDetail = () => {
     setPlayingTrailer(false);
     setMovieDetailOpen(false);
-    // setWatchingMovie removed for performance
     setActiveMovie(0); // Reset to first movie when closing
-  };
-
-  // Add function to handle streaming modal close
-  const handleCloseStreamingModal = () => {
-    setIsStreamingModalOpen(false);
-    // Don't clear selectedContent here to maintain state
   };
 
   const handleListAction = (movie: Movie) => {
@@ -1432,18 +1420,6 @@ export const Index = () => {
       </div>
 
       {/* Modals and Notifications */}
-      {currentMovie && (
-        <StreamingModal
-          isOpen={isStreamingModalOpen}
-          onClose={handleCloseStreamingModal}
-          content={{
-            id: currentMovie.id,
-            title: currentMovie.title,
-            media_type: currentMovie.media_type || 'movie',
-            release_date: currentMovie.release_date
-          }}
-        />
-      )}
 
       {showFeedback && (
         <div className="fixed bottom-4 right-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl shadow-lg animate-fade-in-out flex items-center gap-2">
