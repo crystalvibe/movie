@@ -5,6 +5,44 @@
 
 import { config } from '@/config/env';
 
+// Helper to sanitize any string containing the TMDB API key or general api_key parameters
+export const sanitizeLog = (message: any): any => {
+  if (typeof message !== 'string') return message;
+  
+  let sanitized = message;
+  const tmdbApiKey = config.tmdb.apiKey;
+  if (tmdbApiKey) {
+    const escapedKey = tmdbApiKey.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    sanitized = sanitized.replace(new RegExp(escapedKey, 'g'), '****');
+  }
+  sanitized = sanitized.replace(/api_key=[a-zA-Z0-9]+/gi, 'api_key=****');
+  return sanitized;
+};
+
+// Helper to sanitize arguments array (including error stack traces)
+const sanitizeArgs = (args: any[]): any[] => {
+  return args.map(arg => {
+    if (typeof arg === 'string') {
+      return sanitizeLog(arg);
+    }
+    if (arg instanceof Error) {
+      const sanitizedMessage = sanitizeLog(arg.message);
+      const newError = new Error(sanitizedMessage);
+      newError.name = arg.name;
+      if (arg.stack) {
+        newError.stack = sanitizeLog(arg.stack);
+      }
+      return newError;
+    }
+    return arg;
+  });
+};
+
+// Safe logging wrappers to prevent API key leakage in the developer console
+const log = (...args: any[]) => console.log(...sanitizeArgs(args));
+const error = (...args: any[]) => console.error(...sanitizeArgs(args));
+const warn = (...args: any[]) => console.warn(...sanitizeArgs(args));
+
 // Define the options interface for fetch requests
 interface FetchOptions extends RequestInit {
   headers?: Record<string, string>;
@@ -53,7 +91,7 @@ const formatProxyUrl = (proxyUrl: string, targetUrl: string): string => {
     } else {
       targetUrl = `${tmdbBaseUrl}${targetUrl}`;
     }
-    console.log("Formatted TMDB URL:", targetUrl.replace(tmdbApiKey, '****'));
+    log("Formatted TMDB URL:", targetUrl.replace(tmdbApiKey, '****'));
   }
   
   // ThingProxy needs direct concatenation (no encoding needed)
@@ -194,13 +232,13 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
     // Create a new AbortController for each proxy attempt
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-      console.log(`Timeout reached for proxy ${i + 1}: ${PROXY_URLS[i]}`);
+      log(`Timeout reached for proxy ${i + 1}: ${PROXY_URLS[i]}`);
       controller.abort();
     }, DEFAULT_TIMEOUT);
     
     try {
       const proxyUrl = formatProxyUrl(PROXY_URLS[i], url);
-      console.log(`Trying proxy ${i + 1}: ${PROXY_URLS[i]} with URL: ${proxyUrl}`);
+      log(`Trying proxy ${i + 1}: ${PROXY_URLS[i]} with URL: ${proxyUrl}`);
       
       const response = await fetch(proxyUrl, { 
         ...options,
@@ -224,12 +262,12 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
         timestamp: Date.now()
       });
       
-      console.log(`Successful response from proxy ${i + 1}: ${PROXY_URLS[i]}`);
+      log(`Successful response from proxy ${i + 1}: ${PROXY_URLS[i]}`);
       return data;
-    } catch (error) {
+    } catch (errorVal) {
       clearTimeout(timeoutId);
-      const formattedError = handleFetchError(error, PROXY_URLS[i]);
-      console.error(`Proxy ${i + 1} (${PROXY_URLS[i]}) failed:`, formattedError.message);
+      const formattedError = handleFetchError(errorVal, PROXY_URLS[i]);
+      error(`Proxy ${i + 1} (${PROXY_URLS[i]}) failed:`, formattedError.message);
       lastError = formattedError;
       
       // Add a small delay between proxy attempts to avoid overwhelming them
@@ -243,11 +281,11 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
   try {
     const directController = new AbortController();
     const directTimeoutId = setTimeout(() => {
-      console.log('Direct API call timeout reached');
+      log('Direct API call timeout reached');
       directController.abort();
     }, DEFAULT_TIMEOUT);
     
-    console.log(`Trying direct API call to: ${url}`);
+    log(`Trying direct API call to: ${url}`);
     
     const response = await fetch(url, {
       ...options,
@@ -272,16 +310,16 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
       timestamp: Date.now()
     });
     
-    console.log('Direct API call successful');
+    log('Direct API call successful');
     return data;
-  } catch (error) {
-    const formattedError = handleFetchError(error, 'direct call');
-    console.error('Direct API call failed:', formattedError.message);
+  } catch (errorVal) {
+    const formattedError = handleFetchError(errorVal, 'direct call');
+    error('Direct API call failed:', formattedError.message);
     
     // Try JSONP as a last resort (only works for APIs that support it)
     if (url.includes('api.themoviedb.org')) {
       try {
-        console.log('Trying JSONP as last resort');
+        log('Trying JSONP as last resort');
         const data = await fetchWithJSONP(url);
         
         // Cache the result
@@ -290,16 +328,16 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
           timestamp: Date.now()
         });
         
-        console.log('JSONP call successful');
+        log('JSONP call successful');
         return data;
       } catch (jsonpError) {
-        console.error('JSONP fallback failed:', jsonpError);
+        error('JSONP fallback failed:', jsonpError);
       }
     }
     
     // If all methods fail, try to return mock data for TMDB API calls
     if (url.includes('api.themoviedb.org') && url.includes('/discover/movie')) {
-      console.log('All proxies failed, returning mock data for TMDB discover endpoint');
+      log('All proxies failed, returning mock data for TMDB discover endpoint');
       return getMockTMDBResponse(url);
     }
     
@@ -446,7 +484,7 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
   const proxyPromises = PROXY_URLS.map(async (proxyUrl, index) => {
     try {
       const fullUrl = formatProxyUrl(proxyUrl, url);
-      console.log(`Trying parallel proxy ${index + 1}: ${proxyUrl} with URL: ${fullUrl}`);
+      log(`Trying parallel proxy ${index + 1}: ${proxyUrl} with URL: ${fullUrl}`);
       
       const response = await fetch(fullUrl, { 
         ...options,
@@ -461,11 +499,11 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
       if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
       
       const data = await response.json();
-      console.log(`Successful parallel response from proxy ${index + 1}: ${proxyUrl}`);
+      log(`Successful parallel response from proxy ${index + 1}: ${proxyUrl}`);
       return data;
-    } catch (error) {
-      const formattedError = handleFetchError(error, proxyUrl);
-      console.error(`Parallel proxy ${index + 1} failed:`, formattedError.message);
+    } catch (errorVal) {
+      const formattedError = handleFetchError(errorVal, proxyUrl);
+      error(`Parallel proxy ${index + 1} failed:`, formattedError.message);
       return Promise.reject(formattedError);
     }
   });
@@ -480,7 +518,7 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
       proxyPromises.map(async (promise) => {
         try {
           return await promise;
-        } catch (error) {
+        } catch (errorVal) {
           // Store failed attempt
           completedPromises.push(false);
           // Only reject this promise when all have failed
@@ -508,7 +546,7 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
     // Try direct call as next resort
     try {
       clearTimeout(timeoutId);
-      console.log(`Trying direct API call to: ${url}`);
+      log(`Trying direct API call to: ${url}`);
       
       const response = await fetch(url, {
         ...options,
@@ -531,16 +569,16 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
         timestamp: Date.now()
       });
       
-      console.log('Direct API call successful');
+      log('Direct API call successful');
       return data;
-    } catch (error) {
-      const formattedError = handleFetchError(error, 'direct call');
-      console.error('All proxies and direct call failed:', formattedError.message);
+    } catch (errorVal) {
+      const formattedError = handleFetchError(errorVal, 'direct call');
+      error('All proxies and direct call failed:', formattedError.message);
       
       // Try JSONP as a last resort (only works for APIs that support it)
       if (url.includes('api.themoviedb.org')) {
         try {
-          console.log('Trying JSONP as last resort');
+          log('Trying JSONP as last resort');
           const data = await fetchWithJSONP(url);
           
           // Cache the result
@@ -549,10 +587,10 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
             timestamp: Date.now()
           });
           
-          console.log('JSONP call successful');
+          log('JSONP call successful');
           return data;
         } catch (jsonpError) {
-          console.error('JSONP fallback failed:', jsonpError);
+          error('JSONP fallback failed:', jsonpError);
         }
       }
       
@@ -577,21 +615,21 @@ export const fetchWithRetry = async (url: string, options: FetchOptions = {}, ma
   
   for (let i = 0; i < maxRetries; i++) {
     try {
-      console.log(`Fetch attempt ${i + 1}/${maxRetries} for: ${url}`);
+      log(`Fetch attempt ${i + 1}/${maxRetries} for: ${url}`);
       const response = await fetchWithProxy(url, options);
-      console.log(`Success on attempt ${i + 1}`);
+      log(`Success on attempt ${i + 1}`);
       return response;
-    } catch (error) {
-      console.error(`Attempt ${i + 1}/${maxRetries} failed:`, error);
-      lastError = error;
+    } catch (errorVal) {
+      error(`Attempt ${i + 1}/${maxRetries} failed:`, errorVal);
+      lastError = errorVal;
       
       // Don't retry on certain types of errors
-      if (error.message && (
-        error.message.includes('offline') ||
-        error.message.includes('forbidden') ||
-        error.message.includes('not found')
+      if (errorVal.message && (
+        errorVal.message.includes('offline') ||
+        errorVal.message.includes('forbidden') ||
+        errorVal.message.includes('not found')
       )) {
-        console.log('Non-retryable error detected, stopping retries');
+        log('Non-retryable error detected, stopping retries');
         break;
       }
       
@@ -600,12 +638,12 @@ export const fetchWithRetry = async (url: string, options: FetchOptions = {}, ma
         const baseDelay = Math.min(1000 * Math.pow(2, i), 5000);
         const jitter = Math.random() * 1000; // Add up to 1 second of jitter
         const delayTime = baseDelay + jitter;
-        console.log(`Waiting ${Math.round(delayTime)}ms before retry...`);
+        log(`Waiting ${Math.round(delayTime)}ms before retry...`);
         await delay(delayTime);
       }
     }
   }
   
-  console.error(`All ${maxRetries} attempts failed for: ${url}`);
+  error(`All ${maxRetries} attempts failed for: ${url}`);
   throw lastError;
 }; 
