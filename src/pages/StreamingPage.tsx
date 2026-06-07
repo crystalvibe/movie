@@ -16,8 +16,7 @@ interface EpisodeCache {
 }
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const PROVIDER_TIMEOUT_MS = 25000;         // 25 seconds — wait generously for slow servers
-const PLAYBACK_CONFIRM_ADVANCE_S = 0.5;   // currentTime must advance at least 0.5s to confirm working
+const PROVIDER_TIMEOUT_MS = 8000;          // 8 seconds per provider attempt
 
 /** Build localStorage key for a given piece of content */
 const getCacheKey = (id: number, type: string, season?: number, episode?: number): string =>
@@ -116,9 +115,6 @@ export const StreamingPage = () => {
   const isSearchingRef = useRef(false);
   const currentProviderIndexRef = useRef(0);
   const failedProvidersRef = useRef<string[]>([]);
-  // Track currentTime baseline for the provider under test
-  const providerBaselineTimeRef = useRef<number | null>(null);
-  const providerBaselineSetRef = useRef(false);
 
   // References to track latest state for progress updates without triggering hook re-subscriptions
   const videoProgressRef = useRef(0);
@@ -285,7 +281,7 @@ export const StreamingPage = () => {
   }, []);
 
   // ─── Runtime provider confirmation ───────────────────────────────────────────
-  // Called when currentTime has actually advanced — proves real playback is happening
+  // Called when the iframe emits a postMessage proving real playback is happening
   const confirmCurrentProviderWorking = useCallback(() => {
     if (!isSearchingRef.current) return;
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
@@ -312,42 +308,6 @@ export const StreamingPage = () => {
     writeCache(cacheKey, providerName, failedProvidersRef.current);
   }, [content.id, content.media_type]);
 
-  // Called with the latest currentTime from the iframe message
-  // Only confirms the provider once time has actually moved forward
-  const checkTimeAdvanceRef = useRef((currentTime: number) => {
-    if (!isSearchingRef.current) return;
-    if (!providerBaselineSetRef.current) {
-      // First time reading — record baseline
-      providerBaselineTimeRef.current = currentTime;
-      providerBaselineSetRef.current = true;
-      console.log(`[AutoDetect] 📍 Baseline set: ${currentTime.toFixed(2)}s`);
-      return;
-    }
-    const baseline = providerBaselineTimeRef.current ?? 0;
-    if (currentTime - baseline >= PLAYBACK_CONFIRM_ADVANCE_S) {
-      console.log(`[AutoDetect] ▶ Time advanced ${(currentTime - baseline).toFixed(2)}s → confirming`);
-      confirmCurrentProviderWorkingRef.current();
-    }
-  });
-
-  // Keep checkTimeAdvanceRef in sync with latest confirmCurrentProviderWorking
-  useEffect(() => {
-    checkTimeAdvanceRef.current = (currentTime: number) => {
-      if (!isSearchingRef.current) return;
-      if (!providerBaselineSetRef.current) {
-        providerBaselineTimeRef.current = currentTime;
-        providerBaselineSetRef.current = true;
-        console.log(`[AutoDetect] 📍 Baseline set: ${currentTime.toFixed(2)}s`);
-        return;
-      }
-      const baseline = providerBaselineTimeRef.current ?? 0;
-      if (currentTime - baseline >= PLAYBACK_CONFIRM_ADVANCE_S) {
-        console.log(`[AutoDetect] ▶ Time advanced ${(currentTime - baseline).toFixed(2)}s → confirming`);
-        confirmCurrentProviderWorkingRef.current();
-      }
-    };
-  }, []);
-
   const confirmCurrentProviderWorkingRef = useRef(confirmCurrentProviderWorking);
   useEffect(() => { confirmCurrentProviderWorkingRef.current = confirmCurrentProviderWorking; }, [confirmCurrentProviderWorking]);
 
@@ -368,9 +328,15 @@ export const StreamingPage = () => {
             progressInterval.current = undefined;
           }
 
-          // ── Playback-signal: only confirm when currentTime is actually advancing ──
-          if (typeof videoData.currentTime === 'number' && videoData.currentTime > 0) {
-            checkTimeAdvanceRef.current(videoData.currentTime);
+          // ── Playback-signal: confirm the current provider is working ──────
+          const isPlaySignal =
+            (typeof videoData.currentTime === 'number' && videoData.currentTime > 0) ||
+            (typeof videoData.duration === 'number' && videoData.duration > 0 && videoData.paused === false) ||
+            videoData.event === 'timeupdate' ||
+            videoData.event === 'play';
+
+          if (isPlaySignal) {
+            confirmCurrentProviderWorkingRef.current();
           }
 
           if (videoData.duration && typeof videoData.duration === 'number' && videoData.duration > 0) {
@@ -431,6 +397,15 @@ export const StreamingPage = () => {
     };
   }, []);
 
+  const handlePlayPause = () => {
+    const iframe = document.querySelector('iframe');
+    if (!iframe) return;
+
+    // Send message to iframe to play/pause
+    iframe.contentWindow?.postMessage({
+      type: isPlaying ? 'pause' : 'play'
+    }, '*');
+  };
 
   const navigateToEpisode = (season: number, episode: number) => {
     // Reset history flag
@@ -610,28 +585,15 @@ export const StreamingPage = () => {
       currentProviderIndexRef.current = idx;
       setCurrentProviderIndex(idx);
       setProviderStatuses(prev => ({ ...prev, [name]: 'loading' }));
-      // Reset baseline tracking for each new provider attempt
-      providerBaselineTimeRef.current = null;
-      providerBaselineSetRef.current = false;
       setSelectedServer(url);
 
-      // Timeout: if currentTime never advances, mark failed and try next
+      // Timeout: if no play-signal arrives, advance to next provider
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
       searchTimeoutRef.current = setTimeout(() => {
         if (!isSearchingRef.current) return;
-        console.log(`[AutoDetect] ⏱ Timeout on ${name} (time never advanced), trying next`);
+        console.log(`[AutoDetect] ⏱ Timeout on ${name}, trying next`);
         failedProvidersRef.current = [...failedProvidersRef.current, name];
         setProviderStatuses(prev => ({ ...prev, [name]: 'failed' }));
-        // Invalidate any stale cache entry that pointed to this server
-        const cacheKey = getCacheKey(
-          content.id, content.media_type,
-          currentSeasonRef.current, currentEpisodeRef.current
-        );
-        const cached = readCache(cacheKey);
-        if (cached?.working === name) {
-          localStorage.removeItem(cacheKey);
-          console.log(`[AutoDetect] 🗑 Cache invalidated for ${name}`);
-        }
         tryProvider(idx + 1);
       }, PROVIDER_TIMEOUT_MS);
     };
@@ -935,26 +897,49 @@ export const StreamingPage = () => {
 
         {/* History Button */}
         <button
-          onClick={() => {
-            if (!content.id) return;
-            const mediaType = content.media_type === 'tv' || content.media_type === 'movie'
-              ? content.media_type : 'movie';
-            const currentServerName = selectedServer
-              ? Object.entries(groupedSources).find(([_, servers]) => servers.some(s => s.url === selectedServer))?.[0]
-              : 'Unknown';
-            const historyItem = {
-              id: content.id,
-              title: content.title || content.name || 'Unknown',
-              media_type: mediaType,
-              poster_path: content.poster_path || '',
-              progress: Math.round((videoProgress / videoDuration) * 100) || 0,
-              season: mediaType === 'tv' ? currentSeason : undefined,
-              episode: mediaType === 'tv' ? currentEpisode : undefined,
-              server: currentServerName,
-              server_url: selectedServer || undefined
-            };
-            addToWatchHistory(historyItem);
-            hasAddedToHistory.current = true;
+          onClick={async () => {
+            try {
+              if (!content.id) {
+                console.error('No content ID available');
+                return;
+              }
+
+              // Ensure we have a valid media_type
+              const mediaType = content.media_type === 'tv' || content.media_type === 'movie' 
+                ? content.media_type 
+                : 'movie';
+
+              // Get current server name
+              const currentServerName = selectedServer ? 
+                Object.entries(groupedSources)
+                  .find(([_, servers]) => servers.some(s => s.url === selectedServer))?.[0] 
+                : 'Unknown';
+
+              // Create history item
+              const historyItem = {
+                id: content.id,
+                title: content.title || content.name || 'Unknown',
+                media_type: mediaType,
+                poster_path: content.poster_path || '',
+                progress: Math.round((videoProgress / videoDuration) * 100) || 0,
+                season: mediaType === 'tv' ? currentSeason : undefined,
+                episode: mediaType === 'tv' ? currentEpisode : undefined,
+                server: currentServerName,
+                server_url: selectedServer || undefined
+              };
+
+              // Use the context's addToWatchHistory function
+              addToWatchHistory(historyItem);
+              
+              // Set flag to prevent duplicate additions
+              hasAddedToHistory.current = true;
+
+              // Show success message
+              alert('Successfully added to watch history!');
+            } catch (error) {
+              console.error('Error adding to watch history:', error);
+              alert('Failed to add to watch history. Please try again.');
+            }
           }}
             className="px-3 py-2 bg-black/70 backdrop-blur-md text-white rounded-lg 
                        hover:bg-black/80 transition-all duration-200 border border-transparent hover:border-purple-500/20
