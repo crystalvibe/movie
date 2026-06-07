@@ -1,78 +1,52 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { X, Shield, Gauge, Wifi, MonitorPlay, CheckCircle2, Play, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, Shield, Gauge, Wifi, MonitorPlay, CheckCircle2, Play, ChevronDown, ChevronLeft, ChevronRight, Loader2, AlertCircle } from 'lucide-react';
 import { streamingService } from '@/services/streamingService';
 import { useWatchHistory } from '@/contexts/WatchHistoryContext';
 import { cn } from '@/lib/utils';
 import { fetchWithParallelProxy } from '@/utils/proxyService';
 
-// Helper to map full embed URLs to self-hosted same-origin proxy check endpoints
-const getProxyCheckUrl = (url: string): string => {
-  if (url.includes('vidlink.pro')) {
-    return url.replace('https://vidlink.pro', '/api/check/vidlink');
+// ─── Provider status types ────────────────────────────────────────────────────
+type ProviderStatus = 'idle' | 'loading' | 'working' | 'failed';
+
+interface EpisodeCache {
+  working: string;       // provider group name that last succeeded
+  failed: string[];      // provider group names that failed
+  timestamp: number;
+}
+
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PROVIDER_TIMEOUT_MS = 8000;          // 8 seconds per provider attempt
+
+/** Build localStorage key for a given piece of content */
+const getCacheKey = (id: number, type: string, season?: number, episode?: number): string =>
+  type === 'tv'
+    ? `fluid_ep_${id}_tv_${season}_${episode}`
+    : `fluid_ep_${id}_movie`;
+
+/** Read cached provider result (null if missing/expired) */
+const readCache = (key: string): EpisodeCache | null => {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const data: EpisodeCache = JSON.parse(raw);
+    if (Date.now() - data.timestamp > CACHE_TTL_MS) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
   }
-  if (url.includes('vidking.net')) {
-    return url.replace('https://www.vidking.net', '/api/check/vidking');
-  }
-  if (url.includes('videasy.net')) {
-    return url.replace('https://player.videasy.net', '/api/check/videasy');
-  }
-  if (url.includes('2embed')) {
-    return url.replace('https://www.2embed.skin', '/api/check/2embed');
-  }
-  if (url.includes('peachify.pro')) {
-    return url.replace('https://peachify.pro', '/api/check/peachify');
-  }
-  if (url.includes('embed-api.stream')) {
-    return url.replace('https://player.embed-api.stream', '/api/check/embedapi');
-  }
-  return url;
 };
 
-// Helper function to check availability of a streaming server via same-origin proxy
-const checkServerAvailability = async (url: string): Promise<{ url: string; working: boolean; responseTime: number }> => {
-  const startTime = Date.now();
+/** Write cache entry after a provider succeeds */
+const writeCache = (key: string, working: string, failed: string[]) => {
   try {
-    const checkUrl = getProxyCheckUrl(url);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000); // 4-second timeout
-    
-    const response = await fetch(checkUrl, {
-      method: 'GET',
-      signal: controller.signal,
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (response.status === 404) {
-      return { url, working: false, responseTime: Date.now() - startTime };
-    }
-    
-    if (!response.ok) {
-      // If Vercel returns 500/504 or other errors, we assume it's working so we don't accidentally hide it
-      return { url, working: true, responseTime: Date.now() - startTime };
-    }
-    
-    const text = await response.text();
-    const lowerText = text.toLowerCase();
-    
-    // Check for common error indicators in the HTML returned by these embed providers
-    const isError = 
-      lowerText.includes('404 not found') ||
-      lowerText.includes('video not found') ||
-      lowerText.includes('content not found') ||
-      lowerText.includes('no video') ||
-      lowerText.includes('invalid video') ||
-      (lowerText.includes('not found') && (lowerText.includes('video') || lowerText.includes('movie') || lowerText.includes('show') || lowerText.includes('episode')));
-      
-    if (isError) {
-      return { url, working: false, responseTime: Date.now() - startTime };
-    }
-    
-    return { url, working: true, responseTime: Date.now() - startTime };
-  } catch (error) {
-    // Treat network errors or timeouts as working to avoid false negatives
-    return { url, working: true, responseTime: Date.now() - startTime };
+    const entry: EpisodeCache = { working, failed, timestamp: Date.now() };
+    localStorage.setItem(key, JSON.stringify(entry));
+  } catch {
+    // Storage quota exceeded — ignore
   }
 };
 
@@ -84,6 +58,10 @@ export const StreamingPage = () => {
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoProgress, setVideoProgress] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  // Runtime provider detection state
+  const [providerStatuses, setProviderStatuses] = useState<Record<string, ProviderStatus>>({});
+  const [currentProviderIndex, setCurrentProviderIndex] = useState(0);
+  const [isSearching, setIsSearching] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const searchParams = new URLSearchParams(location.search);
@@ -133,6 +111,10 @@ export const StreamingPage = () => {
   const progressInterval = useRef<NodeJS.Timeout>();
   const lastUpdateTime = useRef<number>(0);
   const hasAddedToHistory = useRef<boolean>(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout>();
+  const isSearchingRef = useRef(false);
+  const currentProviderIndexRef = useRef(0);
+  const failedProvidersRef = useRef<string[]>([]);
 
   // References to track latest state for progress updates without triggering hook re-subscriptions
   const videoProgressRef = useRef(0);
@@ -154,6 +136,13 @@ export const StreamingPage = () => {
     if (prevSeasonRef.current !== currentSeason || prevEpisodeRef.current !== currentEpisode) {
       setSelectedServer(null);
       setLoading(true);
+      setIsSearching(false);
+      setProviderStatuses({});
+      setCurrentProviderIndex(0);
+      isSearchingRef.current = false;
+      currentProviderIndexRef.current = 0;
+      failedProvidersRef.current = [];
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
       prevSeasonRef.current = currentSeason;
       prevEpisodeRef.current = currentEpisode;
     }
@@ -291,55 +280,80 @@ export const StreamingPage = () => {
     };
   }, []);
 
+  // ─── Runtime provider confirmation ───────────────────────────────────────────
+  // Called when the iframe emits a postMessage proving real playback is happening
+  const confirmCurrentProviderWorking = useCallback(() => {
+    if (!isSearchingRef.current) return;
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    isSearchingRef.current = false;
+    setIsSearching(false);
+    setLoading(false);
+
+    // Find which provider group owns the currently selected URL
+    const currentUrl = selectedServerRef.current;
+    const groupEntry = Object.entries(groupedSourcesRef.current)
+      .find(([, servers]: any) => servers.some((s: any) => s.url === currentUrl));
+    const providerName = groupEntry?.[0] ?? 'Unknown';
+
+    setProviderStatuses(prev => ({ ...prev, [providerName]: 'working' }));
+    console.log(`[AutoDetect] ✅ Confirmed working: ${providerName}`);
+
+    // Save to localStorage cache
+    const cacheKey = getCacheKey(
+      content.id,
+      content.media_type,
+      currentSeasonRef.current,
+      currentEpisodeRef.current
+    );
+    writeCache(cacheKey, providerName, failedProvidersRef.current);
+  }, [content.id, content.media_type]);
+
+  const confirmCurrentProviderWorkingRef = useRef(confirmCurrentProviderWorking);
+  useEffect(() => { confirmCurrentProviderWorkingRef.current = confirmCurrentProviderWorking; }, [confirmCurrentProviderWorking]);
+
   // Handle iframe messages for video state
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       try {
         let video = event.data;
-        // Parse stringified JSON if needed
         if (typeof video === 'string') {
-          try {
-            video = JSON.parse(video);
-          } catch (e) {
-            // Not JSON
-          }
+          try { video = JSON.parse(video); } catch { /* not JSON */ }
         }
-        
-        // Different video players send different message formats
+
         if (video && typeof video === 'object') {
-          // Handle cases where details are nested inside 'data' property (like PLAYER_EVENT)
           const videoData = video.type === 'PLAYER_EVENT' && video.data ? video.data : video;
-          
-          // If we receive a real event, stop the simulated progress timer
+
           if (progressInterval.current) {
             clearInterval(progressInterval.current);
             progressInterval.current = undefined;
           }
 
-          // If duration is provided
+          // ── Playback-signal: confirm the current provider is working ──────
+          const isPlaySignal =
+            (typeof videoData.currentTime === 'number' && videoData.currentTime > 0) ||
+            (typeof videoData.duration === 'number' && videoData.duration > 0 && videoData.paused === false) ||
+            videoData.event === 'timeupdate' ||
+            videoData.event === 'play';
+
+          if (isPlaySignal) {
+            confirmCurrentProviderWorkingRef.current();
+          }
+
           if (videoData.duration && typeof videoData.duration === 'number' && videoData.duration > 0) {
             setVideoDuration(videoData.duration);
           }
-          
-          // If current time is provided
+
           if (videoData.currentTime && typeof videoData.currentTime === 'number') {
             const timeDiff = Math.abs(videoData.currentTime - videoProgressRef.current);
             videoProgressRef.current = videoData.currentTime;
             setVideoProgress(videoData.currentTime);
-            
-            // If user jumped timeline (seeked) more than 3 seconds, save immediately
-            if (timeDiff > 3) {
-              saveProgressRef.current();
-            }
+            if (timeDiff > 3) saveProgressRef.current();
           }
-          
-          // If paused state is provided or player event indicates pause/seek/end
+
           if (videoData.paused !== undefined) {
             const wasPlaying = isPlayingRef.current;
             setIsPlaying(!videoData.paused);
-            if (videoData.paused && wasPlaying) {
-              saveProgressRef.current(); // Save immediately on pause
-            }
+            if (videoData.paused && wasPlaying) saveProgressRef.current();
           } else if (videoData.event === 'timeupdate') {
             setIsPlaying(true);
           } else if (videoData.event === 'pause') {
@@ -352,49 +366,34 @@ export const StreamingPage = () => {
             saveProgressRef.current();
           }
         }
-        
-        // If the video player doesn't send messages in the expected format,
-        // let's simulate progress for testing purposes
-        const hasRealDuration = video && typeof video === 'object' && 
-          (video.duration || (video.type === 'PLAYER_EVENT' && video.data?.duration));
 
-        if (!hasRealDuration) {
-          // Start a timer that simulates progress if none is being reported
-          if (!progressInterval.current && videoDurationRef.current === 0) {
-            // Simulate a 2-minute video
-            setVideoDuration(120);
-            
-            // Simulate progress updates every second
-            progressInterval.current = setInterval(() => {
-              setVideoProgress(prev => {
-                const newProgress = prev + 1;
-                if (newProgress >= 120) {
-                  if (progressInterval.current) {
-                    clearInterval(progressInterval.current);
-                    progressInterval.current = undefined;
-                  }
-                  // Save on video ended
-                  saveProgressRef.current();
-                  return 120;
-                }
-                return newProgress;
-              });
-            }, 1000);
-          }
+        // Simulate progress fallback when providers don't emit events
+        const hasRealDuration = video && typeof video === 'object' &&
+          (video.duration || (video.type === 'PLAYER_EVENT' && video.data?.duration));
+        if (!hasRealDuration && !progressInterval.current && videoDurationRef.current === 0) {
+          setVideoDuration(120);
+          progressInterval.current = setInterval(() => {
+            setVideoProgress(prev => {
+              const next = prev + 1;
+              if (next >= 120) {
+                clearInterval(progressInterval.current!);
+                progressInterval.current = undefined;
+                saveProgressRef.current();
+                return 120;
+              }
+              return next;
+            });
+          }, 1000);
         }
-      } catch (error) {
-        console.error("Error handling message from iframe:", error);
+      } catch (err) {
+        console.error('Error handling iframe message:', err);
       }
     };
 
     window.addEventListener('message', handleMessage);
-    
-    // Cleanup
     return () => {
       window.removeEventListener('message', handleMessage);
-      if (progressInterval.current) {
-        clearInterval(progressInterval.current);
-      }
+      if (progressInterval.current) clearInterval(progressInterval.current);
     };
   }, []);
 
@@ -506,73 +505,107 @@ export const StreamingPage = () => {
   selectedServerRef.current = selectedServer;
   groupedSourcesRef.current = groupedSources;
 
-  const serverInfoUrl = serverInfo?.server_url;
-
+  // ─── Runtime sequential provider detection ───────────────────────────────────
   useEffect(() => {
     if (sources.length === 0) return;
-    
-    // If a server is already selected, do not re-run auto-selection
-    if (selectedServer) {
-      setLoading(false);
-      return;
+    // Only kick off detection when no server is selected yet
+    if (selectedServer) { setLoading(false); return; }
+
+    const providerNames = Object.keys(groupedSources);
+    if (providerNames.length === 0) return;
+
+    // Init all statuses to idle
+    const initStatuses: Record<string, ProviderStatus> = {};
+    providerNames.forEach(n => { initStatuses[n] = 'idle'; });
+    setProviderStatuses(initStatuses);
+    failedProvidersRef.current = [];
+
+    // ── Determine start index, honouring cache and watch-history hint ─────
+    const cacheKey = getCacheKey(
+      content.id, content.media_type,
+      currentSeason, currentEpisode
+    );
+    const cached = readCache(cacheKey);
+
+    let startIdx = 0;
+
+    // Check watch-history hint first
+    const historyUrl = serverInfo?.server_url;
+    if (historyUrl) {
+      const historyGroup = Object.entries(groupedSources)
+        .find(([, servers]: any) => servers.some((s: any) => s.url === historyUrl))?.[0];
+      if (historyGroup) {
+        const idx = providerNames.indexOf(historyGroup);
+        if (idx !== -1) startIdx = idx;
+      }
     }
-    
-    let isMounted = true;
-    setLoading(true);
-    
-    const findBestServer = async () => {
-      // 1. Try to use saved server from history if available
-      if (serverInfoUrl) {
-        const savedServer = sources.find(s => s.url === serverInfoUrl);
-        if (savedServer) {
-          const check = await checkServerAvailability(savedServer.url);
-          if (check.working && isMounted) {
-            setSelectedServer(savedServer.url);
-            setLoading(false);
-            return;
+
+    // Cache overrides history hint
+    if (cached?.working) {
+      const cachedIdx = providerNames.indexOf(cached.working);
+      if (cachedIdx !== -1) {
+        startIdx = cachedIdx;
+        // Pre-mark known failed providers from cache
+        cached.failed.forEach(name => {
+          if (providerNames.includes(name)) {
+            initStatuses[name] = 'failed';
+            failedProvidersRef.current.push(name);
           }
-        }
-      }
-      
-      // 2. Otherwise, check all servers in parallel
-      const checkPromises = sources.map(async (source) => {
-        const check = await checkServerAvailability(source.url);
-        return { source, ...check };
-      });
-      
-      const results = await Promise.all(checkPromises);
-      
-      if (!isMounted) return;
-      
-      // Filter working servers
-      const workingServers = results.filter(r => r.working);
-      
-      if (workingServers.length > 0) {
-        // Sort working servers by priority (lower number is higher priority)
-        workingServers.sort((a, b) => {
-          if (a.source.priority !== b.source.priority) {
-            return a.source.priority - b.source.priority;
-          }
-          return a.responseTime - b.responseTime;
         });
-        
-        console.log('Automatically selected working server:', workingServers[0].source.name, 'in', workingServers[0].responseTime, 'ms');
-        setSelectedServer(workingServers[0].source.url);
-      } else {
-        // Fallback to first source as default if none detected working
-        console.log('No working servers detected, falling back to default:', sources[0].name);
-        setSelectedServer(sources[0].url);
+        setProviderStatuses({ ...initStatuses });
+        console.log(`[AutoDetect] Cache hit → starting with ${cached.working}`);
       }
-      
-      setLoading(false);
+    }
+
+    currentProviderIndexRef.current = startIdx;
+    isSearchingRef.current = true;
+    setCurrentProviderIndex(startIdx);
+    setIsSearching(true);
+    setLoading(true);
+
+    // ── tryProvider: load a provider, wait for play signal or timeout ─────
+    const tryProvider = (idx: number) => {
+      if (!isSearchingRef.current) return;
+      if (idx >= providerNames.length) {
+        // Exhausted all providers — fall back to first source
+        console.log('[AutoDetect] All providers exhausted, using first source as fallback');
+        isSearchingRef.current = false;
+        setIsSearching(false);
+        setSelectedServer(sources[0].url);
+        setLoading(false);
+        return;
+      }
+
+      const name = providerNames[idx];
+      const providerSources = (groupedSources as any)[name];
+      if (!providerSources?.length) { tryProvider(idx + 1); return; }
+      const url = providerSources[0].url;
+
+      console.log(`[AutoDetect] Trying ${name} (${idx + 1}/${providerNames.length})`);
+      currentProviderIndexRef.current = idx;
+      setCurrentProviderIndex(idx);
+      setProviderStatuses(prev => ({ ...prev, [name]: 'loading' }));
+      setSelectedServer(url);
+
+      // Timeout: if no play-signal arrives, advance to next provider
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = setTimeout(() => {
+        if (!isSearchingRef.current) return;
+        console.log(`[AutoDetect] ⏱ Timeout on ${name}, trying next`);
+        failedProvidersRef.current = [...failedProvidersRef.current, name];
+        setProviderStatuses(prev => ({ ...prev, [name]: 'failed' }));
+        tryProvider(idx + 1);
+      }, PROVIDER_TIMEOUT_MS);
     };
-    
-    findBestServer();
-    
+
+    tryProvider(startIdx);
+
     return () => {
-      isMounted = false;
+      isSearchingRef.current = false;
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     };
-  }, [sources, selectedServer, serverInfoUrl]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sources]);
 
   const [showEpisodeSelector, setShowEpisodeSelector] = useState(false);
   const [expandedSeason, setExpandedSeason] = useState<number | null>(null);
@@ -584,23 +617,44 @@ export const StreamingPage = () => {
         {/* Loading Screen */}
         {loading && (
           <div className="absolute inset-0 bg-black z-30 flex flex-col items-center justify-center">
-            <div className="w-24 h-24 rounded-full border-4 border-purple-500 border-t-transparent animate-spin mb-8" />
-            <div className="flex items-center gap-2 text-purple-500">
-              <MonitorPlay className="w-6 h-6" />
-              <span className="text-lg font-medium">Loading Stream</span>
+            <div className="w-20 h-20 rounded-full border-4 border-purple-500 border-t-transparent animate-spin mb-6" />
+            <div className="flex items-center gap-2 text-purple-400 mb-2">
+              <MonitorPlay className="w-5 h-5" />
+              <span className="text-base font-semibold">
+                {isSearching
+                  ? `Finding best server\u2026 (${currentProviderIndex + 1} of ${Object.keys(groupedSources).length})`
+                  : 'Loading Stream'}
+              </span>
             </div>
-            <div className="mt-4 flex items-center gap-4 text-white/40">
+            {isSearching && Object.keys(providerStatuses).length > 0 && (
+              <div className="flex items-center gap-2 mt-3 flex-wrap justify-center max-w-xs">
+                {Object.entries(providerStatuses).map(([name, status]) => (
+                  <div key={name} className="flex items-center gap-1 text-[11px]">
+                    {status === 'loading' && <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />}
+                    {status === 'working' && <CheckCircle2 className="w-3 h-3 text-green-400" />}
+                    {status === 'failed'  && <AlertCircle className="w-3 h-3 text-red-400" />}
+                    {status === 'idle'    && <div className="w-2 h-2 rounded-full bg-white/20" />}
+                    <span className={cn(
+                      status === 'working' ? 'text-green-400' :
+                      status === 'failed'  ? 'text-red-400/60' :
+                      status === 'loading' ? 'text-yellow-400' : 'text-white/30'
+                    )}>{name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-5 flex items-center gap-4 text-white/30">
               <div className="flex items-center gap-1">
                 <Shield className="w-4 h-4" />
-                <span className="text-sm">Secure Stream</span>
+                <span className="text-xs">Secure Stream</span>
               </div>
               <div className="flex items-center gap-1">
                 <Gauge className="w-4 h-4" />
-                <span className="text-sm">High Quality</span>
+                <span className="text-xs">High Quality</span>
               </div>
               <div className="flex items-center gap-1">
                 <Wifi className="w-4 h-4" />
-                <span className="text-sm">Auto-Adjust</span>
+                <span className="text-xs">Auto-Adjust</span>
               </div>
             </div>
           </div>
@@ -733,16 +787,16 @@ export const StreamingPage = () => {
 
           {/* Servers Section */}
           <div className="relative group w-full">
-            {/* Servers Button */}
-        <button
-          onClick={() => setShowServers(!showServers)}
-              className="px-3 py-2 bg-black/70 backdrop-blur-md text-white rounded-lg 
+            <button
+              onClick={() => setShowServers(!showServers)}
+              className="px-3 py-2 bg-black/70 backdrop-blur-md text-white rounded-lg
                          hover:bg-black/80 transition-all duration-200 border border-transparent hover:border-purple-500/20
                          flex items-center justify-between w-full text-xs"
-        >
+            >
               <div className="flex items-center gap-1">
                 <MonitorPlay className="w-4 h-4 text-purple-400" />
-          <span>Servers</span>
+                <span>Servers</span>
+                {isSearching && <Loader2 className="w-3 h-3 text-yellow-400 animate-spin ml-1" />}
               </div>
               <ChevronDown className={cn(
                 "w-4 h-4 text-white/60 transition-transform duration-200",
@@ -755,58 +809,87 @@ export const StreamingPage = () => {
               <div className="absolute top-full left-0 mt-2 bg-black/95 backdrop-blur-md border border-white/10 rounded-lg overflow-hidden w-full z-40
                               shadow-lg shadow-purple-500/10 animate-in fade-in duration-200">
                 <div className="p-2 border-b border-white/10">
-                  <h3 className="font-medium text-xs text-white/90">Available Servers</h3>
+                  <h3 className="font-medium text-xs text-white/90">
+                    {isSearching ? 'Auto-detecting\u2026' : 'Available Servers'}
+                  </h3>
                 </div>
                 <div className="max-h-[35vh] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                  {Object.entries(groupedSources).map(([provider, servers]) => (
-                    <div key={provider} className="border-b border-white/10 last:border-b-0">
-                      <button
-                        onClick={() => setExpandedServer(expandedServer === provider ? null : provider)}
-                        className="w-full px-3 py-2 flex items-center justify-between hover:bg-white/5 transition-colors duration-200"
-                      >
-                        <div className="flex flex-col items-start gap-0.5">
-                          <span className="text-xs font-medium text-white/90">{provider}</span>
-                          <span className="text-[10px] text-white/40">{servers.length} Src</span>
-                        </div>
-                        <ChevronDown className={cn(
-                          "w-4 h-4 text-white/60 transition-transform duration-200",
-                          expandedServer === provider && "transform rotate-180"
-                        )} />
-        </button>
-                      
-                      {expandedServer === provider && (
-                        <div className="bg-white/[0.02] py-1">
-                          {servers.map((server, index) => (
-                            <button
-                              key={index}
-                              onClick={() => {
-                                setSelectedServer(server.url);
-                                setShowServers(false);
-                              }}
-                              className={cn(
-                                "w-full px-5 py-1.5 flex items-center justify-between group/server hover:bg-white/5 transition-colors duration-200 text-xs",
-                                selectedServer === server.url 
-                                  ? "bg-purple-500/20 text-purple-400" 
-                                  : "text-white/75"
-                              )}
-                            >
-                              <div className="flex items-center gap-1">
-                                <span>{server.quality}</span>
-                                {server.quality.includes('HD') && (
-                                  <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-400">HD</span>
-                                )}
+                  {Object.entries(groupedSources)
+                    .sort(([a], [b]) => {
+                      // Working first, then idle/loading, then failed
+                      const order = { working: 0, loading: 1, idle: 2, failed: 3 };
+                      return (order[providerStatuses[a] ?? 'idle'] ?? 2) - (order[providerStatuses[b] ?? 'idle'] ?? 2);
+                    })
+                    .map(([provider, servers]) => {
+                      const status = providerStatuses[provider] ?? 'idle';
+                      const isFailed = status === 'failed';
+                      return (
+                        <div key={provider} className={cn("border-b border-white/10 last:border-b-0", isFailed && 'opacity-50')}>
+                          <button
+                            onClick={() => setExpandedServer(expandedServer === provider ? null : provider)}
+                            className="w-full px-3 py-2 flex items-center justify-between hover:bg-white/5 transition-colors duration-200"
+                          >
+                            <div className="flex flex-col items-start gap-0.5">
+                              <div className="flex items-center gap-1.5">
+                                {status === 'loading' && <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />}
+                                {status === 'working' && <CheckCircle2 className="w-3 h-3 text-green-400" />}
+                                {status === 'failed'  && <AlertCircle className="w-3 h-3 text-red-400" />}
+                                {status === 'idle'    && <div className="w-2 h-2 rounded-full bg-white/20" />}
+                                <span className={cn(
+                                  "text-xs font-medium",
+                                  status === 'working' ? 'text-green-400' :
+                                  status === 'loading' ? 'text-yellow-400' :
+                                  status === 'failed'  ? 'text-red-400/70' : 'text-white/90'
+                                )}>{provider}</span>
                               </div>
-                              {selectedServer === server.url ? (
-                                <CheckCircle2 className="w-4 h-4 text-purple-400" />
-                              ) : (
-                                <Play className="w-4 h-4 opacity-0 group-hover/server:opacity-100 transition-opacity duration-200" />
-                              )}
-                            </button>
-                          ))}
+                              <span className="text-[10px] text-white/30">{servers.length} Src</span>
+                            </div>
+                            <ChevronDown className={cn(
+                              "w-4 h-4 text-white/60 transition-transform duration-200",
+                              expandedServer === provider && "transform rotate-180"
+                            )} />
+                          </button>
+
+                          {expandedServer === provider && (
+                            <div className="bg-white/[0.02] py-1">
+                              {servers.map((server, index) => (
+                                <button
+                                  key={index}
+                                  onClick={() => {
+                                    // Manual override — stop auto-search and lock this server
+                                    isSearchingRef.current = false;
+                                    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+                                    setIsSearching(false);
+                                    setSelectedServer(server.url);
+                                    setLoading(false);
+                                    setShowServers(false);
+                                  }}
+                                  className={cn(
+                                    "w-full px-5 py-1.5 flex items-center justify-between group/server hover:bg-white/5 transition-colors duration-200 text-xs",
+                                    selectedServer === server.url
+                                      ? "bg-purple-500/20 text-purple-400"
+                                      : "text-white/75"
+                                  )}
+                                >
+                                  <div className="flex items-center gap-1">
+                                    <span>{server.quality}</span>
+                                    {server.quality.includes('HD') && (
+                                      <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-400">HD</span>
+                                    )}
+                                  </div>
+                                  {selectedServer === server.url ? (
+                                    <CheckCircle2 className="w-4 h-4 text-purple-400" />
+                                  ) : (
+                                    <Play className="w-4 h-4 opacity-0 group-hover/server:opacity-100 transition-opacity duration-200" />
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  ))}
+                      );
+                    })
+                  }
                 </div>
               </div>
             )}
