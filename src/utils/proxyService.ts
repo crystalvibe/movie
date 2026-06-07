@@ -340,9 +340,9 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
       directController.abort();
     }, DEFAULT_TIMEOUT);
 
-    log(`Trying direct API call to: ${url}`);
+    log(`Trying direct API call to: ${resolvedUrl}`);
 
-    const response = await fetch(url, {
+    const response = await fetch(resolvedUrl, {
       ...options,
       signal: directController.signal,
       headers: {
@@ -372,10 +372,10 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
     error('Direct API call failed:', formattedError.message);
 
     // Try JSONP as a last resort (only works for APIs that support it)
-    if (url.includes('api.themoviedb.org')) {
+    if (resolvedUrl.includes('api.themoviedb.org')) {
       try {
         log('Trying JSONP as last resort');
-        const data = await fetchWithJSONP(url);
+        const data = await fetchWithJSONP(resolvedUrl);
 
         // Cache the result
         apiCache.set(cacheKey, {
@@ -618,9 +618,9 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
     // Try direct call as next resort
     try {
       clearTimeout(timeoutId);
-      log(`Trying direct API call to: ${url}`);
+      log(`Trying direct API call to: ${resolvedUrl}`);
 
-      const response = await fetch(url, {
+      const response = await fetch(resolvedUrl, {
         ...options,
         signal: controller.signal,
         headers: {
@@ -648,10 +648,10 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
       error('All proxies and direct call failed:', formattedError.message);
 
       // Try JSONP as a last resort (only works for APIs that support it)
-      if (url.includes('api.themoviedb.org')) {
+      if (resolvedUrl.includes('api.themoviedb.org')) {
         try {
           log('Trying JSONP as last resort');
-          const data = await fetchWithJSONP(url);
+          const data = await fetchWithJSONP(resolvedUrl);
 
           // Cache the result
           apiCache.set(cacheKey, {
