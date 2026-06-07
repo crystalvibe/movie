@@ -6,6 +6,54 @@ import { useWatchHistory } from '@/contexts/WatchHistoryContext';
 import { cn } from '@/lib/utils';
 import { fetchWithParallelProxy } from '@/utils/proxyService';
 
+// Helper function to check availability of a streaming server via CORS proxy
+const checkServerAvailability = async (url: string): Promise<{ url: string; working: boolean; responseTime: number }> => {
+  const startTime = Date.now();
+  try {
+    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000); // 4-second timeout
+    
+    const response = await fetch(proxyUrl, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (response.status === 404) {
+      return { url, working: false, responseTime: Date.now() - startTime };
+    }
+    
+    if (!response.ok) {
+      // If it is a 403, 500, etc., the proxy itself might be blocked or rate-limited.
+      // We assume it's working so we don't accidentally filter out a valid player.
+      return { url, working: true, responseTime: Date.now() - startTime };
+    }
+    
+    const text = await response.text();
+    const lowerText = text.toLowerCase();
+    
+    // Check for common error indicators in the HTML returned by these embed providers
+    const isError = 
+      lowerText.includes('404 not found') ||
+      lowerText.includes('video not found') ||
+      lowerText.includes('content not found') ||
+      lowerText.includes('no video') ||
+      lowerText.includes('invalid video') ||
+      (lowerText.includes('not found') && (lowerText.includes('video') || lowerText.includes('movie') || lowerText.includes('show') || lowerText.includes('episode')));
+      
+    if (isError) {
+      return { url, working: false, responseTime: Date.now() - startTime };
+    }
+    
+    return { url, working: true, responseTime: Date.now() - startTime };
+  } catch (error) {
+    // Treat network errors or timeouts on proxy as working to avoid false negatives
+    return { url, working: true, responseTime: Date.now() - startTime };
+  }
+};
+
 export const StreamingPage = () => {
   const [loading, setLoading] = useState(true);
   const [selectedServer, setSelectedServer] = useState<string | null>(null);
@@ -439,27 +487,69 @@ export const StreamingPage = () => {
   const serverInfoUrl = serverInfo?.server_url;
 
   useEffect(() => {
-    if (sources.length > 0) {
+    if (sources.length === 0) return;
+    
+    // If a server is already selected, do not re-run auto-selection
+    if (selectedServer) {
+      setLoading(false);
+      return;
+    }
+    
+    let isMounted = true;
+    setLoading(true);
+    
+    const findBestServer = async () => {
       // 1. Try to use saved server from history if available
       if (serverInfoUrl) {
         const savedServer = sources.find(s => s.url === serverInfoUrl);
         if (savedServer) {
-          if (selectedServer !== savedServer.url) {
+          const check = await checkServerAvailability(savedServer.url);
+          if (check.working && isMounted) {
             setSelectedServer(savedServer.url);
+            setLoading(false);
+            return;
           }
-          const timer = setTimeout(() => setLoading(false), 1500);
-          return () => clearTimeout(timer);
         }
       }
       
-      // 2. Otherwise, if no server is selected yet, choose the first available server
-      if (!selectedServer) {
+      // 2. Otherwise, check all servers in parallel
+      const checkPromises = sources.map(async (source) => {
+        const check = await checkServerAvailability(source.url);
+        return { source, ...check };
+      });
+      
+      const results = await Promise.all(checkPromises);
+      
+      if (!isMounted) return;
+      
+      // Filter working servers
+      const workingServers = results.filter(r => r.working);
+      
+      if (workingServers.length > 0) {
+        // Sort working servers by priority (lower number is higher priority)
+        workingServers.sort((a, b) => {
+          if (a.source.priority !== b.source.priority) {
+            return a.source.priority - b.source.priority;
+          }
+          return a.responseTime - b.responseTime;
+        });
+        
+        console.log('Automatically selected working server:', workingServers[0].source.name, 'in', workingServers[0].responseTime, 'ms');
+        setSelectedServer(workingServers[0].source.url);
+      } else {
+        // Fallback to first source as default if none detected working
+        console.log('No working servers detected, falling back to default:', sources[0].name);
         setSelectedServer(sources[0].url);
       }
-    }
+      
+      setLoading(false);
+    };
     
-    const timer = setTimeout(() => setLoading(false), 1500);
-    return () => clearTimeout(timer);
+    findBestServer();
+    
+    return () => {
+      isMounted = false;
+    };
   }, [sources, selectedServer, serverInfoUrl]);
 
   const [showEpisodeSelector, setShowEpisodeSelector] = useState(false);
