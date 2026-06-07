@@ -8,7 +8,7 @@ import { config } from '@/config/env';
 // Helper to sanitize any string containing the TMDB API key or general api_key parameters
 export const sanitizeLog = (message: any): any => {
   if (typeof message !== 'string') return message;
-  
+
   let sanitized = message;
   const tmdbApiKey = config.tmdb.apiKey;
   if (tmdbApiKey) {
@@ -83,7 +83,7 @@ const formatProxyUrl = (proxyUrl: string, targetUrl: string): string => {
   if (targetUrl.startsWith('/') && !targetUrl.includes('api.themoviedb.org')) {
     const tmdbBaseUrl = config.tmdb.baseUrl;
     const tmdbApiKey = config.tmdb.apiKey;
-    
+
     // Make sure we're not adding API key if already present
     if (!targetUrl.includes('api_key=')) {
       // Add api_key parameter to the URL
@@ -92,28 +92,32 @@ const formatProxyUrl = (proxyUrl: string, targetUrl: string): string => {
       targetUrl = `${tmdbBaseUrl}${targetUrl}`;
     }
     log("Formatted TMDB URL:", targetUrl.replace(tmdbApiKey, '****'));
+  } else if (targetUrl.includes('api.themoviedb.org') && !targetUrl.includes('api_key=')) {
+    const tmdbApiKey = config.tmdb.apiKey;
+    targetUrl = `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}api_key=${tmdbApiKey}`;
+    log("Added TMDB API key:", targetUrl.replace(tmdbApiKey, '****'));
   }
-  
+
   // ThingProxy needs direct concatenation (no encoding needed)
   if (proxyUrl === 'https://thingproxy.freeboard.io/fetch/') {
     return `${proxyUrl}${targetUrl}`;
   }
-  
+
   // YaCDN proxy needs direct concatenation
   if (proxyUrl === 'https://yacdn.org/proxy/') {
     return `${proxyUrl}${targetUrl}`;
   }
-  
+
   // CORS.sh needs direct concatenation
   if (proxyUrl === 'https://proxy.cors.sh/') {
     return `${proxyUrl}${targetUrl}`;
   }
-  
+
   // CORS.eu.org needs direct concatenation
   if (proxyUrl === 'https://cors.eu.org/') {
     return `${proxyUrl}${targetUrl}`;
   }
-  
+
   // Default for other proxies that need URL encoding
   return `${proxyUrl}${encodeURIComponent(targetUrl)}`;
 };
@@ -126,35 +130,35 @@ const handleFetchError = (error: any, proxyUrl: string): Error => {
   if (error.name === 'AbortError') {
     return new Error(`Request timeout with proxy ${proxyUrl}: The request took too long to complete`);
   }
-  
+
   // Check if the error is a TypeError with "Failed to fetch" message (common CORS error)
   if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
     return new Error(`CORS error with proxy ${proxyUrl}: The request was blocked by the browser`);
   }
-  
+
   // Check if there's a network error
   if (!navigator.onLine) {
     return new Error('Network error: You appear to be offline');
   }
-  
+
   // Check for specific HTTP status codes
   if (error.status === 429) {
     return new Error(`Rate limit exceeded with proxy ${proxyUrl}: Too many requests`);
   }
-  
+
   if (error.status === 503) {
     return new Error(`Service unavailable with proxy ${proxyUrl}: The proxy is temporarily down`);
   }
-  
+
   if (error.status === 403) {
     return new Error(`Access forbidden with proxy ${proxyUrl}: The proxy blocked this request`);
   }
-  
+
   // If the error already has a message from the API, pass it through
   if (error instanceof Error) {
     return error;
   }
-  
+
   return new Error(`Unknown error with proxy ${proxyUrl}: ${error.message || 'No details available'}`);
 };
 
@@ -170,37 +174,37 @@ export const fetchWithJSONP = (url: string, callbackParam = 'callback'): Promise
   return new Promise((resolve, reject) => {
     // Create a unique callback name
     const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
-    
+
     // Create script element
     const script = document.createElement('script');
-    
+
     // Set timeout to clean up if request fails
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error('JSONP request timed out'));
     }, DEFAULT_TIMEOUT);
-    
+
     // Clean up function to remove script and global callback
     const cleanup = () => {
       if (script.parentNode) script.parentNode.removeChild(script);
       delete (window as any)[callbackName];
       clearTimeout(timeout);
     };
-    
+
     // Add callback to window object
     (window as any)[callbackName] = (data: any) => {
       cleanup();
       resolve(data);
     };
-    
+
     // Add callback parameter to URL
     const separator = url.includes('?') ? '&' : '?';
     const jsonpUrl = `${url}${separator}${callbackParam}=${callbackName}`;
-    
+
     // Set script source and append to document
     script.src = jsonpUrl;
     document.body.appendChild(script);
-    
+
     // Handle script error
     script.onerror = () => {
       cleanup();
@@ -225,8 +229,59 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
     return cachedData?.data;
   }
 
+  // Resolve relative paths if baseUrl is absolute (production)
+  let resolvedUrl = url;
+  if (!url.startsWith('http')) {
+    if (url.startsWith('/api/tmdb')) {
+      const baseUrl = config.tmdb.baseUrl || 'https://api.themoviedb.org/3';
+      resolvedUrl = url.replace('/api/tmdb', baseUrl);
+    } else if (!url.startsWith('/api/')) {
+      const baseUrl = config.tmdb.baseUrl || 'https://api.themoviedb.org/3';
+      resolvedUrl = `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+    }
+  }
+
+  // Intercept relative paths / self-hosted proxy calls (e.g. /api/tmdb)
+  if (resolvedUrl.startsWith('/api/') || !resolvedUrl.startsWith('http')) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
+
+      let targetUrl = resolvedUrl;
+      if (targetUrl.startsWith('/api/tmdb') && !targetUrl.includes('api_key=')) {
+        const tmdbApiKey = config.tmdb.apiKey;
+        targetUrl = `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}api_key=${tmdbApiKey}`;
+      }
+
+      log(`Fetching natively through self-hosted proxy: ${targetUrl}`);
+      const response = await fetch(targetUrl, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          ...(options.headers || {}),
+          'Content-Type': 'application/json',
+          'Cache-Control': 'max-age=3600'
+        }
+      });
+
+      clearTimeout(timeoutId);
+      if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
+      const data = await response.json();
+
+      apiCache.set(cacheKey, {
+        data,
+        timestamp: Date.now()
+      });
+
+      return data;
+    } catch (err) {
+      error(`Native self-hosted proxy call failed for ${url}:`, err);
+      throw err;
+    }
+  }
+
   let lastError;
-  
+
   // Try each proxy in sequence until one works
   for (let i = 0; i < PROXY_URLS.length; i++) {
     // Create a new AbortController for each proxy attempt
@@ -235,12 +290,12 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
       log(`Timeout reached for proxy ${i + 1}: ${PROXY_URLS[i]}`);
       controller.abort();
     }, DEFAULT_TIMEOUT);
-    
+
     try {
       const proxyUrl = formatProxyUrl(PROXY_URLS[i], url);
       log(`Trying proxy ${i + 1}: ${PROXY_URLS[i]} with URL: ${proxyUrl}`);
-      
-      const response = await fetch(proxyUrl, { 
+
+      const response = await fetch(proxyUrl, {
         ...options,
         signal: controller.signal,
         headers: {
@@ -250,18 +305,18 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
       });
-      
+
       if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
-      
+
       clearTimeout(timeoutId);
       const data = await response.json();
-      
+
       // Cache the result
       apiCache.set(cacheKey, {
         data,
         timestamp: Date.now()
       });
-      
+
       log(`Successful response from proxy ${i + 1}: ${PROXY_URLS[i]}`);
       return data;
     } catch (errorVal) {
@@ -269,14 +324,14 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
       const formattedError = handleFetchError(errorVal, PROXY_URLS[i]);
       error(`Proxy ${i + 1} (${PROXY_URLS[i]}) failed:`, formattedError.message);
       lastError = formattedError;
-      
+
       // Add a small delay between proxy attempts to avoid overwhelming them
       if (i < PROXY_URLS.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
   }
-  
+
   // Try direct call as next resort
   try {
     const directController = new AbortController();
@@ -284,9 +339,9 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
       log('Direct API call timeout reached');
       directController.abort();
     }, DEFAULT_TIMEOUT);
-    
+
     log(`Trying direct API call to: ${url}`);
-    
+
     const response = await fetch(url, {
       ...options,
       signal: directController.signal,
@@ -298,49 +353,49 @@ export const fetchWithProxy = async (url: string, options: FetchOptions = {}): P
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
       }
     });
-    
+
     if (!response.ok) throw new Error(`Direct API request failed with status ${response.status}`);
-    
+
     clearTimeout(directTimeoutId);
     const data = await response.json();
-    
+
     // Cache the result
     apiCache.set(cacheKey, {
       data,
       timestamp: Date.now()
     });
-    
+
     log('Direct API call successful');
     return data;
   } catch (errorVal) {
     const formattedError = handleFetchError(errorVal, 'direct call');
     error('Direct API call failed:', formattedError.message);
-    
+
     // Try JSONP as a last resort (only works for APIs that support it)
     if (url.includes('api.themoviedb.org')) {
       try {
         log('Trying JSONP as last resort');
         const data = await fetchWithJSONP(url);
-        
+
         // Cache the result
         apiCache.set(cacheKey, {
           data,
           timestamp: Date.now()
         });
-        
+
         log('JSONP call successful');
         return data;
       } catch (jsonpError) {
         error('JSONP fallback failed:', jsonpError);
       }
     }
-    
+
     // If all methods fail, try to return mock data for TMDB API calls
     if (url.includes('api.themoviedb.org') && url.includes('/discover/movie')) {
       log('All proxies failed, returning mock data for TMDB discover endpoint');
       return getMockTMDBResponse(url);
     }
-    
+
     throw lastError || formattedError;
   }
 };
@@ -353,11 +408,11 @@ const getMockTMDBResponse = (url: string) => {
   // Parse URL to determine what kind of response to return
   const urlObj = new URL(url);
   const pathname = urlObj.pathname;
-  
+
   if (pathname.includes('/discover/movie')) {
     // Return mock movie data based on language
     const language = urlObj.searchParams.get('with_original_language') || 'en';
-    
+
     const mockMovies = {
       en: [
         {
@@ -414,9 +469,9 @@ const getMockTMDBResponse = (url: string) => {
         }
       ]
     };
-    
+
     const movies = mockMovies[language] || mockMovies.en;
-    
+
     return {
       page: 1,
       results: movies,
@@ -424,7 +479,7 @@ const getMockTMDBResponse = (url: string) => {
       total_results: movies.length
     };
   }
-  
+
   if (pathname.includes('/trending/movie/day')) {
     return {
       page: 1,
@@ -450,7 +505,7 @@ const getMockTMDBResponse = (url: string) => {
       total_results: 1
     };
   }
-  
+
   // Default fallback
   return {
     page: 1,
@@ -476,17 +531,34 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
     return cachedData?.data;
   }
 
+  // Resolve relative paths if baseUrl is absolute (production)
+  let resolvedUrl = url;
+  if (!url.startsWith('http')) {
+    if (url.startsWith('/api/tmdb')) {
+      const baseUrl = config.tmdb.baseUrl || 'https://api.themoviedb.org/3';
+      resolvedUrl = url.replace('/api/tmdb', baseUrl);
+    } else if (!url.startsWith('/api/')) {
+      const baseUrl = config.tmdb.baseUrl || 'https://api.themoviedb.org/3';
+      resolvedUrl = `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+    }
+  }
+
+  // Intercept relative paths / self-hosted proxy calls (e.g. /api/tmdb)
+  if (resolvedUrl.startsWith('/api/') || !resolvedUrl.startsWith('http')) {
+    return fetchWithProxy(resolvedUrl, options);
+  }
+
   // Set timeout for fetch requests
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
-  
+
   // Try all proxies in parallel for faster response
   const proxyPromises = PROXY_URLS.map(async (proxyUrl, index) => {
     try {
       const fullUrl = formatProxyUrl(proxyUrl, url);
       log(`Trying parallel proxy ${index + 1}: ${proxyUrl} with URL: ${fullUrl}`);
-      
-      const response = await fetch(fullUrl, { 
+
+      const response = await fetch(fullUrl, {
         ...options,
         signal: controller.signal,
         headers: {
@@ -495,9 +567,9 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
           'Origin': window.location.origin
         }
       });
-      
+
       if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
-      
+
       const data = await response.json();
       log(`Successful parallel response from proxy ${index + 1}: ${proxyUrl}`);
       return data;
@@ -507,12 +579,12 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
       return Promise.reject(formattedError);
     }
   });
-  
+
   // Use Promise.race to get the first successful response
   try {
     // Store completed promises to avoid race condition issues
     const completedPromises: boolean[] = [];
-    
+
     // Create a race of promises that rejects only when all promises reject
     const data = await Promise.race(
       proxyPromises.map(async (promise) => {
@@ -532,22 +604,22 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
         }
       })
     );
-    
+
     clearTimeout(timeoutId);
-    
+
     // Store in memory cache
     apiCache.set(cacheKey, {
       data,
       timestamp: Date.now()
     });
-    
+
     return data;
   } catch (errors) {
     // Try direct call as next resort
     try {
       clearTimeout(timeoutId);
       log(`Trying direct API call to: ${url}`);
-      
+
       const response = await fetch(url, {
         ...options,
         signal: controller.signal,
@@ -558,42 +630,42 @@ export const fetchWithParallelProxy = async (url: string, options: FetchOptions 
           'Cache-Control': 'max-age=3600'
         }
       });
-      
+
       if (!response.ok) throw new Error(`Direct API request failed with status ${response.status}`);
-      
+
       const data = await response.json();
-      
+
       // Cache the result
       apiCache.set(cacheKey, {
         data,
         timestamp: Date.now()
       });
-      
+
       log('Direct API call successful');
       return data;
     } catch (errorVal) {
       const formattedError = handleFetchError(errorVal, 'direct call');
       error('All proxies and direct call failed:', formattedError.message);
-      
+
       // Try JSONP as a last resort (only works for APIs that support it)
       if (url.includes('api.themoviedb.org')) {
         try {
           log('Trying JSONP as last resort');
           const data = await fetchWithJSONP(url);
-          
+
           // Cache the result
           apiCache.set(cacheKey, {
             data,
             timestamp: Date.now()
           });
-          
+
           log('JSONP call successful');
           return data;
         } catch (jsonpError) {
           error('JSONP fallback failed:', jsonpError);
         }
       }
-      
+
       throw formattedError;
     }
   }
@@ -612,7 +684,7 @@ export const delay = (ms: number): Promise<void> => new Promise(resolve => setTi
  */
 export const fetchWithRetry = async (url: string, options: FetchOptions = {}, maxRetries = 3): Promise<any> => {
   let lastError;
-  
+
   for (let i = 0; i < maxRetries; i++) {
     try {
       log(`Fetch attempt ${i + 1}/${maxRetries} for: ${url}`);
@@ -622,7 +694,7 @@ export const fetchWithRetry = async (url: string, options: FetchOptions = {}, ma
     } catch (errorVal) {
       error(`Attempt ${i + 1}/${maxRetries} failed:`, errorVal);
       lastError = errorVal;
-      
+
       // Don't retry on certain types of errors
       if (errorVal.message && (
         errorVal.message.includes('offline') ||
@@ -632,7 +704,7 @@ export const fetchWithRetry = async (url: string, options: FetchOptions = {}, ma
         log('Non-retryable error detected, stopping retries');
         break;
       }
-      
+
       // Exponential backoff delay with jitter
       if (i < maxRetries - 1) {
         const baseDelay = Math.min(1000 * Math.pow(2, i), 5000);
@@ -643,7 +715,7 @@ export const fetchWithRetry = async (url: string, options: FetchOptions = {}, ma
       }
     }
   }
-  
+
   error(`All ${maxRetries} attempts failed for: ${url}`);
   throw lastError;
 }; 

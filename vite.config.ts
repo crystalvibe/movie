@@ -8,6 +8,12 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    proxy: {
+      '/api/tmdb': {
+        target: 'https://fluid-cinetranscend-main.vercel.app',
+        changeOrigin: true,
+      }
+    }
   },
   plugins: [
     react(),

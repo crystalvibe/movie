@@ -108,3 +108,4 @@ storybook-static
 
 # Vite local timestamps/temp files
 vite.config.ts.timestamp-*
+.vercel
