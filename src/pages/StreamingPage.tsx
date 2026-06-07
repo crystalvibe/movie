@@ -6,15 +6,38 @@ import { useWatchHistory } from '@/contexts/WatchHistoryContext';
 import { cn } from '@/lib/utils';
 import { fetchWithParallelProxy } from '@/utils/proxyService';
 
-// Helper function to check availability of a streaming server via CORS proxy
+// Helper to map full embed URLs to self-hosted same-origin proxy check endpoints
+const getProxyCheckUrl = (url: string): string => {
+  if (url.includes('vidlink.pro')) {
+    return url.replace('https://vidlink.pro', '/api/check/vidlink');
+  }
+  if (url.includes('vidking.net')) {
+    return url.replace('https://www.vidking.net', '/api/check/vidking');
+  }
+  if (url.includes('videasy.net')) {
+    return url.replace('https://player.videasy.net', '/api/check/videasy');
+  }
+  if (url.includes('2embed')) {
+    return url.replace('https://www.2embed.skin', '/api/check/2embed');
+  }
+  if (url.includes('peachify.pro')) {
+    return url.replace('https://peachify.pro', '/api/check/peachify');
+  }
+  if (url.includes('embed-api.stream')) {
+    return url.replace('https://player.embed-api.stream', '/api/check/embedapi');
+  }
+  return url;
+};
+
+// Helper function to check availability of a streaming server via same-origin proxy
 const checkServerAvailability = async (url: string): Promise<{ url: string; working: boolean; responseTime: number }> => {
   const startTime = Date.now();
   try {
-    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+    const checkUrl = getProxyCheckUrl(url);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 4000); // 4-second timeout
     
-    const response = await fetch(proxyUrl, {
+    const response = await fetch(checkUrl, {
       method: 'GET',
       signal: controller.signal,
     });
@@ -26,8 +49,7 @@ const checkServerAvailability = async (url: string): Promise<{ url: string; work
     }
     
     if (!response.ok) {
-      // If it is a 403, 500, etc., the proxy itself might be blocked or rate-limited.
-      // We assume it's working so we don't accidentally filter out a valid player.
+      // If Vercel returns 500/504 or other errors, we assume it's working so we don't accidentally hide it
       return { url, working: true, responseTime: Date.now() - startTime };
     }
     
@@ -49,7 +71,7 @@ const checkServerAvailability = async (url: string): Promise<{ url: string; work
     
     return { url, working: true, responseTime: Date.now() - startTime };
   } catch (error) {
-    // Treat network errors or timeouts on proxy as working to avoid false negatives
+    // Treat network errors or timeouts as working to avoid false negatives
     return { url, working: true, responseTime: Date.now() - startTime };
   }
 };

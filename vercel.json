@@ -5,6 +5,30 @@
       "destination": "https://api.themoviedb.org/3/:path*"
     },
     {
+      "source": "/api/check/vidlink/:path*",
+      "destination": "https://vidlink.pro/:path*"
+    },
+    {
+      "source": "/api/check/vidking/:path*",
+      "destination": "https://www.vidking.net/:path*"
+    },
+    {
+      "source": "/api/check/videasy/:path*",
+      "destination": "https://player.videasy.net/:path*"
+    },
+    {
+      "source": "/api/check/2embed/:path*",
+      "destination": "https://www.2embed.skin/:path*"
+    },
+    {
+      "source": "/api/check/peachify/:path*",
+      "destination": "https://peachify.pro/:path*"
+    },
+    {
+      "source": "/api/check/embedapi/:path*",
+      "destination": "https://player.embed-api.stream/:path*"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

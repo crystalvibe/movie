@@ -12,6 +12,10 @@ export default defineConfig(({ mode }) => ({
       '/api/tmdb': {
         target: 'https://fluid-cinetranscend-main.vercel.app',
         changeOrigin: true,
+      },
+      '/api/check': {
+        target: 'https://fluid-cinetranscend-main.vercel.app',
+        changeOrigin: true,
       }
     }
   },
